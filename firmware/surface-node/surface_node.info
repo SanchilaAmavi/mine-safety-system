@@ -1,0 +1,12 @@
+# Surface Node Configuration
+
+name=surface_node
+role=surface
+location=surface_station
+firmware_version=1.0.0
+last_updated=2026-06-02
+
+# Add additional surface node configuration fields below:
+# sensor_type=...
+# network_mode=...
+# power_source=...
