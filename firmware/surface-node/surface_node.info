@@ -1,12 +1,543 @@
-# Surface Node Configuration
+//  MINE SAFETY SYSTEM — SURFACE NODE  
+//  Board   : ESP32-S3-N16R8
+//            Arduino IDE → Tools → Board → "ESP32S3 Dev Module"
+//            Tools → PSRAM → "OPI PSRAM"
+//            Tools → Flash Mode → "QIO 80MHz"
+//            Tools → Partition Scheme → "Huge APP (3MB)"
+//            Tools → Upload Speed → 921600
+//
+//  Libraries (install via Library Manager):
+//    - LoRa   by Sandeep Mistry
+//    - U8g2   by oliver
+// ============================================================
+//  COMPLETE FINAL PIN MAP — SURFACE NODE
+//  ─────────────────────────────────────────────────────────
+//  LoRa Ra-02 SX1278
+//    VCC→3.3V  GND→GND
+//    NSS→GPIO10   MOSI→GPIO11
+//    SCK→GPIO12   MISO→GPIO13
+//    RST→GPIO14   DIO0→GPIO9
+//
+//  SIM800L GSM Module
+//    VCC → XL4015 output 4.0V (independent supply + 2200µF cap)
+//    GND → Common GND
+//    RST → GPIO19
+//    RX  → GPIO17  (ESP TX → SIM800L RX)  + voltage divider!
+//    TX  → GPIO18  (ESP RX ← SIM800L TX)
+//
+//    ⚠️  VOLTAGE DIVIDER on ESP GPIO17 → SIM800L RX pin:
+//        GPIO17 ──[1kΩ]──┬── SIM800L RX
+//                        │
+//                      [2.2kΩ]
+//                        │
+//                       GND
+//
+//  OLED 1.3" SH1106 (I2C)
+//    VCC→3.3V  GND→GND
+//    SDA→GPIO5
+//    SCL→GPIO6
+//
+//  3.3V Active Buzzer
+//    (+)→GPIO8    (-)→GND
+//
+//  ✅  GPIO48 & GPIO38 freed — those are onboard RGB LED pins
+//  ✅  GPIO15/16 freed — those are PSRAM internal pins on N16R8
+// ============================================================
 
-name=surface_node
-role=surface
-location=surface_station
-firmware_version=1.0.0
-last_updated=2026-06-02
+#include <SPI.h>
+#include <Wire.h>
+#include <LoRa.h>
+#include <HardwareSerial.h>
+#include <U8g2lib.h>
+#include "esp_system.h"
+#define BROWNOUT_REG_ADDR 0x600800F0UL
 
-# Add additional surface node configuration fields below:
-# sensor_type=...
-# network_mode=...
-# power_source=...
+// ── LoRa pins ─────────────────────────────────────────────────
+#define LORA_NSS    10
+#define LORA_RST    14
+#define LORA_DIO0    9
+#define LORA_MOSI   11
+#define LORA_SCK    12
+#define LORA_MISO   13
+#define LORA_FREQ   433E6
+
+// ── SIM800L pins ──────────────────────────────────────────────
+#define SIM_RST   19
+#define SIM_TX    17    // ESP TX → SIM800L RX  (via 1kΩ/2.2kΩ divider)
+#define SIM_RX    18    // ESP RX ← SIM800L TX
+
+// ── OLED I2C ──────────────────────────────────────────────────
+#define OLED_SDA   5
+#define OLED_SCL   6
+
+// ── Buzzer ────────────────────────────────────────────────────
+#define PIN_BUZZER  8
+
+// ── SMS number ────────────────────────────────────────────────
+#define PHONE  "+94716643413"
+
+// ── Packet types ──────────────────────────────────────────────
+#define PKT_ALERT     'A'
+#define PKT_TELEMETRY 'T'
+#define PKT_ACK       'K'
+
+// ── Timing ────────────────────────────────────────────────────
+#define SMS_COOLDOWN_MS  30000UL
+#define BEEP_ON_MS          150
+#define BEEP_PERIOD_MS     1000
+
+// ── U8g2 OLED — SH1106 (most 1.3" OLEDs) ─────────────────────
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+
+// ── Serial for SIM800L ────────────────────────────────────────
+HardwareSerial sim800(1);   // UART1
+
+// ── Per-mine state ────────────────────────────────────────────
+struct MineState {
+  int           mq4       = 0;
+  int           mq7       = 0;
+  int           water     = 0;
+  uint8_t       flags     = 0;
+  int           rssi      = 0;
+  bool          inAlert   = false;
+  unsigned long lastSmsMs = 0;
+};
+MineState mine[2];   // [0]=Mine1  [1]=Mine2
+
+// ── Buzzer state ──────────────────────────────────────────────
+bool          buzzerEnabled = false;
+unsigned long lastBeepMs    = 0;
+bool          beepHigh      = false;
+
+// ── Status flags ──────────────────────────────────────────────
+bool gsmReady = false;
+bool oledOK   = false;
+
+// =============================================================
+//  AT command helper — send command, collect response
+// =============================================================
+String simAT(const char* cmd, unsigned long waitMs = 1000) {
+  while (sim800.available()) sim800.read();   // flush
+  sim800.println(cmd);
+  unsigned long start = millis();
+  String resp = "";
+  while (millis() - start < waitMs) {
+    while (sim800.available()) resp += (char)sim800.read();
+  }
+  Serial.printf("[AT] '%s' => '%s'\n", cmd, resp.c_str());
+  return resp;
+}
+
+// =============================================================
+//  Wait for token in SIM800L stream
+// =============================================================
+bool simWaitFor(const char* token, unsigned long timeoutMs) {
+  unsigned long start = millis();
+  String buf = "";
+  while (millis() - start < timeoutMs) {
+    while (sim800.available()) {
+      buf += (char)sim800.read();
+      if (buf.indexOf(token) >= 0) return true;
+      if (buf.length() > 512) buf = buf.substring(256);
+    }
+  }
+  return false;
+}
+
+// =============================================================
+void setup() {
+  // Disable brownout detector (v3.x compatible — direct register address)
+  *((volatile uint32_t *)BROWNOUT_REG_ADDR) = 0;
+
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("=========================================");
+  Serial.println("  SURFACE NODE — Mine Safety System");
+  Serial.println("  GPIO map: SIM TX=17 RX=18 RST=19");
+  Serial.println("            OLED SDA=5 SCL=6");
+  Serial.println("            BUZZER=8");
+  Serial.println("=========================================");
+
+  // ── Buzzer ────────────────────────────────────────────────
+  pinMode(PIN_BUZZER, OUTPUT);
+  digitalWrite(PIN_BUZZER, LOW);
+  // Short startup beep to confirm buzzer works
+  digitalWrite(PIN_BUZZER, HIGH); delay(100);
+  digitalWrite(PIN_BUZZER, LOW);
+  Serial.println("[BUZZ]   Buzzer pin initialised (GPIO8)");
+
+  // ── OLED ──────────────────────────────────────────────────
+  // Use Wire.setPins() before Wire.begin() for ESP32-S3 stability
+  Wire.setPins(OLED_SDA, OLED_SCL);
+  Wire.begin();
+  Wire.setClock(400000);
+
+  u8g2.setI2CAddress(0x3C * 2);   // 0x3C is standard SH1106 address
+  if (u8g2.begin()) {
+    oledOK = true;
+    Serial.println("[OLED]   Ready (SDA=GPIO5, SCL=GPIO6)");
+    drawBootScreen();
+  } else {
+    Serial.println("[OLED]   Init FAILED — check SDA/SCL wiring");
+    Serial.println("         Try address 0x3D: change 0x3C*2 to 0x3D*2");
+  }
+
+  // ── SIM800L — start UART immediately, don't send commands yet ─
+  pinMode(SIM_RST, OUTPUT);
+  digitalWrite(SIM_RST, HIGH);
+  sim800.begin(9600, SERIAL_8N1, SIM_RX, SIM_TX);
+  Serial.println("[GSM]    UART started on UART1 (TX=GPIO17, RX=GPIO18)");
+  Serial.println("[GSM]    Waiting 10s for SIM800L to boot & find network...");
+  if (oledOK) drawSimpleScreen("SIM800L booting", "Please wait 10s");
+  delay(10000);   // Let SIM800L fully boot and register on network
+
+  // Drain any boot messages
+  String bootMsg = "";
+  unsigned long t = millis();
+  while (millis() - t < 1000) {
+    while (sim800.available()) bootMsg += (char)sim800.read();
+  }
+  if (bootMsg.length() > 0) {
+    Serial.println("[GSM]    Boot msg: " + bootMsg);
+  }
+
+  // ── LoRa ──────────────────────────────────────────────────
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
+  LoRa.setPins(LORA_NSS, LORA_RST, LORA_DIO0);
+  Serial.print("[LoRa]   Starting... ");
+  if (!LoRa.begin(LORA_FREQ)) {
+    Serial.println("FAILED!");
+    if (oledOK) drawSimpleScreen("LoRa FAILED!", "Check wiring.");
+    while (true) delay(1000);
+  }
+  Serial.println("OK");
+  LoRa.setSpreadingFactor(9);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.setTxPower(17);
+  LoRa.setSyncWord(0xA3);
+
+  // ── Now init GSM (after LoRa, ~11s since boot — network registered) ─
+  Serial.println("[GSM]    Configuring...");
+  if (oledOK) drawSimpleScreen("GSM configuring", "...");
+  gsmReady = initGSM();
+  Serial.println(gsmReady ? "[GSM]    READY" : "[GSM]    FAILED — SMS disabled");
+
+  Serial.println("[OK]     Surface Node listening for Mine 1 & Mine 2\n");
+  if (oledOK) drawReadyScreen();
+}
+
+// =============================================================
+void loop() {
+  unsigned long now = millis();
+
+  // Drain SIM800L unsolicited messages to Serial
+  while (sim800.available()) Serial.write(sim800.read());
+
+  // Retry GSM init every 60s if not ready
+  static unsigned long tRetry = 0;
+  if (!gsmReady && now - tRetry >= 60000) {
+    tRetry = millis();
+    Serial.println("[GSM]    Retrying init...");
+    gsmReady = initGSM();
+  }
+
+  handleBuzzer(now);
+
+  // Check for LoRa packet
+  if (!LoRa.parsePacket()) return;
+
+  String rx = "";
+  while (LoRa.available()) rx += (char)LoRa.read();
+  int rssi = LoRa.packetRssi();
+  Serial.printf("[RX]     RSSI=%d dBm  %s\n", rssi, rx.c_str());
+
+  char type = rx.charAt(0);
+  if      (type == PKT_ALERT)     onAlert(rx, rssi);
+  else if (type == PKT_TELEMETRY) onTelemetry(rx, rssi);
+}
+
+// =============================================================
+//  ALERT  A,<nodeId>,<seq>,<mq4>,<mq7>,<water>,<flags>
+// =============================================================
+void onAlert(const String &pkt, int rssi) {
+  int f[7] = {0};
+  int fi = 0, start = 0;
+  for (int i = 0; i <= (int)pkt.length() && fi < 7; i++) {
+    if (i == (int)pkt.length() || pkt[i] == ',') {
+      f[fi++] = pkt.substring(start, i).toInt();
+      start = i + 1;
+    }
+  }
+  int     nodeId = f[1];
+  int     seqNum = f[2];
+  int     mq4    = f[3];
+  int     mq7    = f[4];
+  int     water  = f[5];
+  uint8_t flags  = (uint8_t)f[6];
+
+  if (nodeId < 1 || nodeId > 2) return;
+  int mi = nodeId - 1;
+  mine[mi].mq4     = mq4;
+  mine[mi].mq7     = mq7;
+  mine[mi].water   = water;
+  mine[mi].flags   = flags;
+  mine[mi].rssi    = rssi;
+  mine[mi].inAlert = true;
+
+  Serial.printf("[ALERT]  Mine%d CH4=%d CO=%d Water=%d Flags=0x%02X\n",
+                nodeId, mq4, mq7, water, flags);
+
+  if (oledOK) drawAlertScreen(nodeId, mq4, mq7, water, flags, rssi);
+  buzzerEnabled = true;
+
+  unsigned long now = millis();
+  if (gsmReady && now - mine[mi].lastSmsMs >= SMS_COOLDOWN_MS) {
+    mine[mi].lastSmsMs = now;
+    String sms = "MINE SAFETY ALERT!\nMine " + String(nodeId) + ":\n";
+    if (flags & 0x01) sms += "* METHANE(CH4) ADC=" + String(mq4)   + "\n";
+    if (flags & 0x02) sms += "* CARBON MONO  ADC=" + String(mq7)   + "\n";
+    if (flags & 0x04) sms += "* WATER LEVEL  ADC=" + String(water) + "\n";
+    sms += "RSSI=" + String(rssi) + "dBm\nAct immediately!";
+    sendSMS(PHONE, sms);
+  } else {
+    unsigned long rem = (SMS_COOLDOWN_MS - (now - mine[mi].lastSmsMs)) / 1000;
+    Serial.printf("[SMS]    Cooldown %lus remaining\n", rem);
+  }
+
+  // Send ACK back to underground node
+  String ack = String(PKT_ACK) + "," + nodeId + "," + seqNum;
+  LoRa.beginPacket(); LoRa.print(ack); LoRa.endPacket();
+  Serial.println("[ACK TX] " + ack);
+}
+
+// =============================================================
+//  TELEMETRY  T,<nodeId>,<seq>,<mq4>,<mq7>,<water>
+// =============================================================
+void onTelemetry(const String &pkt, int rssi) {
+  int f[6] = {0};
+  int fi = 0, start = 0;
+  for (int i = 0; i <= (int)pkt.length() && fi < 6; i++) {
+    if (i == (int)pkt.length() || pkt[i] == ',') {
+      f[fi++] = pkt.substring(start, i).toInt();
+      start = i + 1;
+    }
+  }
+  int nodeId = f[1];
+  if (nodeId >= 1 && nodeId <= 2) {
+    int mi = nodeId - 1;
+    mine[mi].mq4     = f[3];
+    mine[mi].mq7     = f[4];
+    mine[mi].water   = f[5];
+    mine[mi].flags   = 0;
+    mine[mi].rssi    = rssi;
+    mine[mi].inAlert = false;
+  }
+  Serial.printf("[TEL]    Mine%d CH4=%d CO=%d Water=%d ALL CLEAR\n",
+                nodeId, f[3], f[4], f[5]);
+
+  if (!mine[0].inAlert && !mine[1].inAlert) {
+    buzzerEnabled = false;
+    digitalWrite(PIN_BUZZER, LOW);
+    if (oledOK) drawStatusScreen();
+  }
+}
+
+// =============================================================
+//  Buzzer — 150ms beep every 1s while alert active
+// =============================================================
+void handleBuzzer(unsigned long now) {
+  if (!buzzerEnabled) return;
+  if (!beepHigh && now - lastBeepMs >= BEEP_PERIOD_MS) {
+    digitalWrite(PIN_BUZZER, HIGH);
+    beepHigh = true; lastBeepMs = now;
+  } else if (beepHigh && now - lastBeepMs >= BEEP_ON_MS) {
+    digitalWrite(PIN_BUZZER, LOW);
+    beepHigh = false;
+  }
+}
+
+// =============================================================
+//  OLED screens
+// =============================================================
+void drawBootScreen() {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(10, 12,  "MINE SAFETY SYSTEM");
+    u8g2.drawHLine(0, 15, 128);
+    u8g2.drawStr(22, 32,  "Surface Node");
+    u8g2.drawStr(28, 46,  "Starting...");
+    u8g2.drawStr(8,  60,  "Please wait...");
+  } while (u8g2.nextPage());
+  delay(1000);
+}
+
+void drawSimpleScreen(const char* line1, const char* line2) {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 20, line1);
+    u8g2.drawStr(0, 38, line2);
+  } while (u8g2.nextPage());
+}
+
+void drawReadyScreen() {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(10, 10, "MINE SAFETY SYSTEM");
+    u8g2.drawHLine(0, 13, 128);
+    u8g2.drawStr(14, 26, "Surface Node READY");
+    u8g2.drawStr(8,  40, "Monitoring:");
+    u8g2.drawStr(8,  52, "  Mine 1  &  Mine 2");
+    u8g2.drawHLine(0, 55, 128);
+    u8g2.drawStr(10, 64, "Waiting for data...");
+  } while (u8g2.nextPage());
+}
+
+void drawStatusScreen() {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(22, 10, "** ALL CLEAR **");
+    u8g2.drawHLine(0, 13, 128);
+    char buf[22];
+    snprintf(buf, sizeof(buf), "M1 CH4:%4d CO:%4d", mine[0].mq4, mine[0].mq7);
+    u8g2.drawStr(0, 26, buf);
+    snprintf(buf, sizeof(buf), "   Water:  %4d", mine[0].water);
+    u8g2.drawStr(0, 37, buf);
+    u8g2.drawHLine(0, 40, 128);
+    snprintf(buf, sizeof(buf), "M2 CH4:%4d CO:%4d", mine[1].mq4, mine[1].mq7);
+    u8g2.drawStr(0, 52, buf);
+    snprintf(buf, sizeof(buf), "   Water:  %4d", mine[1].water);
+    u8g2.drawStr(0, 63, buf);
+  } while (u8g2.nextPage());
+}
+
+void drawAlertScreen(int nodeId, int mq4, int mq7, int water,
+                     uint8_t flags, int rssi) {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_9x15B_tf);
+    char hdr[18];
+    snprintf(hdr, sizeof(hdr), "! MINE %d ALERT!", nodeId);
+    u8g2.drawStr(0, 14, hdr);
+    u8g2.drawHLine(0, 17, 128);
+    u8g2.setFont(u8g2_font_6x10_tf);
+    int y = 28;
+    char buf[22];
+    if (flags & 0x01) {
+      snprintf(buf, sizeof(buf), "METHANE  CH4: %4d", mq4);
+      u8g2.drawStr(0, y, buf); y += 11;
+    }
+    if (flags & 0x02) {
+      snprintf(buf, sizeof(buf), "CARBON MONO : %4d", mq7);
+      u8g2.drawStr(0, y, buf); y += 11;
+    }
+    if (flags & 0x04) {
+      snprintf(buf, sizeof(buf), "WATER LEVEL : %4d", water);
+      u8g2.drawStr(0, y, buf); y += 11;
+    }
+    u8g2.drawHLine(0, 55, 128);
+    snprintf(buf, sizeof(buf), "Signal: %d dBm", rssi);
+    u8g2.drawStr(0, 64, buf);
+  } while (u8g2.nextPage());
+}
+
+// =============================================================
+//  GSM Init
+// =============================================================
+bool initGSM() {
+  Serial.println("[GSM]    initGSM() running...");
+
+  // Basic comms
+  String r = simAT("AT", 1500);
+  if (r.indexOf("OK") < 0) {
+    Serial.println("[GSM]    No response — hard resetting...");
+    digitalWrite(SIM_RST, LOW);  delay(300);
+    digitalWrite(SIM_RST, HIGH); delay(8000);
+    r = simAT("AT", 1500);
+    if (r.indexOf("OK") < 0) {
+      Serial.println("[GSM]    No response after reset. Check power.");
+      return false;
+    }
+  }
+
+  simAT("ATE0", 500);                    // echo off
+  simAT("AT+CMGF=1", 1000);             // SMS text mode
+  simAT("AT+CSCS=\"GSM\"", 500);        // GSM charset
+
+  // Check SIM card
+  r = simAT("AT+CPIN?", 1000);
+  if (r.indexOf("READY") < 0) {
+    Serial.println("[GSM]    SIM issue: " + r);
+    return false;
+  }
+
+  // Check network registration (should already be done after 10s boot wait)
+  r = simAT("AT+CREG?", 1000);
+  if (r.indexOf(",1") < 0 && r.indexOf(",5") < 0) {
+    // Not yet registered — wait up to 20 more seconds
+    Serial.print("[GSM]    Waiting for registration");
+    bool reg = false;
+    for (int i = 0; i < 20; i++) {
+      delay(1000);
+      r = simAT("AT+CREG?", 1000);
+      if (r.indexOf(",1") >= 0 || r.indexOf(",5") >= 0) { reg = true; break; }
+      Serial.print(".");
+    }
+    if (!reg) {
+      Serial.println("\n[GSM]    Registration FAILED");
+      Serial.println("[GSM]    " + simAT("AT+CSQ", 500));
+      return false;
+    }
+    Serial.println(" OK");
+  } else {
+    Serial.println("[GSM]    Already registered on network");
+  }
+
+  // Signal strength
+  r = simAT("AT+CSQ", 500);
+  Serial.println("[GSM]    Signal: " + r);
+
+  Serial.println("[GSM]    Init complete.");
+  return true;
+}
+
+// =============================================================
+//  Send SMS
+// =============================================================
+void sendSMS(const String &number, const String &msg) {
+  Serial.println("[SMS]    Sending...");
+
+  simAT("AT+CMGF=1", 1000);
+  delay(200);
+
+  while (sim800.available()) sim800.read();  // flush
+
+  sim800.println("AT+CMGS=\"" + number + "\"");
+
+  if (!simWaitFor(">", 8000)) {
+    Serial.println("[SMS]    No > prompt. Check voltage divider on TX line.");
+    gsmReady = false;
+    return;
+  }
+
+  delay(100);
+  sim800.print(msg);
+  delay(300);
+  sim800.write(26);   // Ctrl+Z
+
+  if (simWaitFor("+CMGS", 30000)) {
+    Serial.println("[SMS]    *** SENT OK ***");
+    if (oledOK) {
+      drawSimpleScreen("SMS SENT!", "Alert delivered.");
+      delay(2000);
+      drawReadyScreen();
+    }
+  } else {
+    Serial.println("[SMS]    Send failed — no +CMGS confirmation");
+    gsmReady = false;
+  }
+}
