@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SubterraGuard Dashboard</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: #0f1c2f;
+      --surface: #15243e;
+      --text: #eef4ff;
+      --muted: #91a8c3;
+      --accent: #f5b700;
+      --danger: #ff5c5c;
+      --success: #57d27a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #0c1f38 0%, #07111f 55%, #020815 100%); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+    header { padding: 28px 24px; display: flex; align-items: center; gap: 18px; }
+    header img { width: 56px; height: 56px; }
+    header .brand { display: grid; gap: 6px; }
+    header .brand h1 { margin: 0; font-size: 1.6rem; }
+    header .brand p { margin: 0; color: var(--muted); max-width: 660px; }
+    main { padding: 0 24px 40px; }
+    .top-panel { display: grid; gap: 18px; grid-template-columns: 1.8fr 1fr; margin-bottom: 28px; }
+    .panel { background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 24px; padding: 24px; }
+    .panel h2 { margin: 0 0 12px; font-size: 1.05rem; letter-spacing: 0.03em; color: var(--accent); }
+    .panel p { margin: 0; color: var(--muted); line-height: 1.75; }
+    .status-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 28px; }
+    .status-card { background: var(--surface); border: 1px solid rgba(255,255,255,0.08); border-radius: 22px; padding: 22px; min-height: 220px; }
+    .status-card h3 { margin: 0 0 10px; font-size: 1.1rem; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; font-size: 0.95rem; }
+    .badge-danger { background: rgba(255,92,92,0.16); color: var(--danger); }
+    .badge-success { background: rgba(87,210,122,0.16); color: var(--success); }
+    .stat-row { display: grid; gap: 10px; margin-top: 16px; }
+    .stat-row div { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.95rem; }
+    .alert-list { display: grid; gap: 14px; }
+    .alert-item { background: rgba(255,255,255,0.04); border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); padding: 18px; }
+    .alert-item h4 { margin: 0 0 8px; font-size: 1rem; }
+    .alert-item small { color: var(--muted); }
+    footer { text-align: center; color: var(--muted); font-size: 0.95rem; margin-top: 24px; }
+    @media (max-width: 900px) { .top-panel { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="./assets/hero.svg" alt="SubterraGuard" />
+    <div class="brand">
+      <h1>SubterraGuard Dashboard</h1>
+      <p>Real-time mine safety monitoring with live Firebase alerts, SMS emergency notification, and multi-node status tracking.</p>
+    </div>
+  </header>
+
+  <main>
+    <div class="top-panel">
+      <section class="panel">
+        <h2>Live Application Status</h2>
+        <p>Surface gateway data is streamed through Firebase Realtime Database. This dashboard updates automatically whenever the surface node sends sensor alerts.</p>
+      </section>
+      <section class="panel">
+        <h2>Connection</h2>
+        <p id="connectionStatus">Waiting for Firebase...</p>
+        <p id="lastUpdated" style="margin-top: 12px; color: var(--muted);">No data loaded yet.</p>
+      </section>
+    </div>
+
+    <section class="status-grid" id="mineStatusCards">
+      <div class="status-card">
+        <h3>Mine 1</h3>
+        <div class="stat-row">
+          <div><span>Status</span><span>Loading...</span></div>
+        </div>
+      </div>
+      <div class="status-card">
+        <h3>Mine 2</h3>
+        <div class="stat-row">
+          <div><span>Status</span><span>Loading...</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Recent Hazard Events</h2>
+      <div class="alert-list" id="alertHistory">
+        <div class="alert-item"><h4>Waiting for live alert history...</h4></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    SubterraGuard &ndash; professional mine safety monitoring with cloud alerts and multi-channel notification.
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
