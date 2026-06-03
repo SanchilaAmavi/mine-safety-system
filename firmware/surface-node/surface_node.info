@@ -1,4 +1,4 @@
-
+//  MINE SAFETY SYSTEM — SURFACE NODE  
 //  Board   : ESP32-S3-N16R8
 //            Arduino IDE → Tools → Board → "ESP32S3 Dev Module"
 //            Tools → PSRAM → "OPI PSRAM"
@@ -9,7 +9,7 @@
 //  Libraries (install via Library Manager):
 //    - LoRa   by Sandeep Mistry
 //    - U8g2   by oliver
-
+// ============================================================
 //  COMPLETE FINAL PIN MAP — SURFACE NODE
 //  ─────────────────────────────────────────────────────────
 //  LoRa Ra-02 SX1278
@@ -42,6 +42,7 @@
 //
 //  ✅  GPIO48 & GPIO38 freed — those are onboard RGB LED pins
 //  ✅  GPIO15/16 freed — those are PSRAM internal pins on N16R8
+// ============================================================
 
 #include <SPI.h>
 #include <Wire.h>
@@ -50,7 +51,6 @@
 #include <U8g2lib.h>
 #include "esp_system.h"
 #define BROWNOUT_REG_ADDR 0x600800F0UL
-
 // ── LoRa pins ─────────────────────────────────────────────────
 #define LORA_NSS    10
 #define LORA_RST    14
@@ -539,4 +539,8 @@ void sendSMS(const String &number, const String &msg) {
     Serial.println("[SMS]    Send failed — no +CMGS confirmation");
     gsmReady = false;
   }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> origin/main
