@@ -4,7 +4,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,19 +19,19 @@ Future<void> main() async {
     debugPrint('Firebase initialization failed: $error');
   }
 
-  runApp(SubterraGuardApp(firebaseAvailable: firebaseAvailable));
+  runApp(MinePulseApp(firebaseAvailable: firebaseAvailable));
 }
 
-class SubterraGuardApp extends StatefulWidget {
-  const SubterraGuardApp({super.key, required this.firebaseAvailable});
+class MinePulseApp extends StatefulWidget {
+  const MinePulseApp({super.key, required this.firebaseAvailable});
 
   final bool firebaseAvailable;
 
   @override
-  State<SubterraGuardApp> createState() => _SubterraGuardAppState();
+  State<MinePulseApp> createState() => _MinePulseAppState();
 }
 
-class _SubterraGuardAppState extends State<SubterraGuardApp> {
+class _MinePulseAppState extends State<MinePulseApp> {
   FirebaseMessaging? _messaging;
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
 
@@ -80,7 +82,7 @@ class _SubterraGuardAppState extends State<SubterraGuardApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SubterraGuard Pro',
+      title: 'Mine Pulse',
       theme: ThemeData.dark().copyWith(
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFFF5B700),
@@ -102,8 +104,13 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const String _emergencyNumber = '112';
+  static const String _emergencySmsTemplate = 'Emergency at mine site. Please respond immediately.';
+
   int _selectedIndex = 0;
   DatabaseReference? statusRef;
+  Position? _currentPosition;
+  String? _locationStatus;
 
   @override
   void initState() {
@@ -111,16 +118,83 @@ class _HomeScreenState extends State<HomeScreen> {
     if (widget.firebaseAvailable) {
       statusRef = FirebaseDatabase.instance.ref('status');
     }
+    _loadCurrentLocation();
+  }
+
+  Future<void> _loadCurrentLocation() async {
+    final position = await _determinePosition();
+    if (position != null) {
+      setState(() => _currentPosition = position);
+    }
+  }
+
+  Future<Position?> _determinePosition() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        setState(() => _locationStatus = 'GPS is disabled. Enable device location for exact map placement.');
+        return null;
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        setState(() => _locationStatus = 'Location permission denied. Allow access in app settings.');
+        return null;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+      );
+      setState(() => _locationStatus = 'Phone located at ${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}');
+      return position;
+    } catch (error) {
+      setState(() => _locationStatus = 'Unable to determine current location: $error');
+      return null;
+    }
+  }
+
+  Future<void> _openPhoneDialer(String number) async {
+    final uri = Uri(scheme: 'tel', path: number);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+      return;
+    }
+    _showToast('Unable to open phone dialer.');
+  }
+
+  Future<void> _sendEmergencySms(String number, String message) async {
+    final uri = Uri(scheme: 'sms', path: number, queryParameters: {'body': message});
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+      return;
+    }
+    _showToast('Unable to open messaging app.');
+  }
+
+  void _showToast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SubterraGuard Pro'),
+        title: const Text('Mine Pulse'),
         centerTitle: true,
       ),
       body: widget.firebaseAvailable ? _buildFirebaseBody() : _buildDemoBody(),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openPhoneDialer(_emergencyNumber),
+        backgroundColor: const Color(0xFFD32F2F),
+        icon: const Icon(Icons.warning),
+        label: const Text('EMERGENCY SOS'),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      extendBody: true,
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         selectedItemColor: const Color(0xFFF5B700),
@@ -129,9 +203,11 @@ class _HomeScreenState extends State<HomeScreen> {
         type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Dashboard'),
+          BottomNavigationBarItem(icon: Icon(Icons.notifications_active), label: 'Alerts'),
+          BottomNavigationBarItem(icon: Icon(Icons.device_hub), label: 'Nodes'),
+          BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: 'Analytics'),
           BottomNavigationBarItem(icon: Icon(Icons.map), label: 'Map'),
-          BottomNavigationBarItem(icon: Icon(Icons.warning), label: 'Alerts'),
-          BottomNavigationBarItem(icon: Icon(Icons.shield), label: 'Safety'),
+          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
         ],
         onTap: (index) => setState(() => _selectedIndex = index),
       ),
@@ -140,7 +216,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildFirebaseBody() {
     if (statusRef == null) {
-      return _buildEmptyState();
+      return _buildTabContent(
+        [],
+        [],
+        dataLabel: 'Mine Pulse is not connected to telemetry.',
+        currentPosition: _currentPosition,
+        locationStatus: _locationStatus,
+        onEmergencyCall: () => _openPhoneDialer(_emergencyNumber),
+        onEmergencySms: () => _sendEmergencySms(_emergencyNumber, _emergencySmsTemplate),
+      );
     }
 
     return StreamBuilder<DatabaseEvent>(
@@ -167,7 +251,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 CircularProgressIndicator(),
                 SizedBox(height: 16),
                 Text(
-                  'Connecting to SubterraGuard cloud telemetry...',
+                  'Connecting to Mine Pulse cloud telemetry...',
                   style: TextStyle(fontSize: 16),
                 ),
               ],
@@ -176,7 +260,15 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (!snapshot.hasData || snapshot.data?.snapshot.value == null) {
-          return _buildEmptyState();
+          return _buildTabContent(
+            [],
+            [],
+            dataLabel: 'No mine devices are connected currently.',
+            currentPosition: _currentPosition,
+            locationStatus: _locationStatus,
+            onEmergencyCall: () => _openPhoneDialer(_emergencyNumber),
+            onEmergencySms: () => _sendEmergencySms(_emergencyNumber, _emergencySmsTemplate),
+          );
         }
 
         final value = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
@@ -188,6 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
             mq7: mine['mq7']?.toString() ?? 'N/A',
             water: mine['water']?.toString() ?? 'N/A',
             rssi: mine['rssi']?.toString() ?? 'N/A',
+            battery: mine['battery']?.toString() ?? 'Unknown',
             active: mine['inAlert'] == true,
             latitude: mine['latitude'] is double ? mine['latitude'] as double : 37.7749,
             longitude: mine['longitude'] is double ? mine['longitude'] as double : -122.4194,
@@ -195,56 +288,72 @@ class _HomeScreenState extends State<HomeScreen> {
         }).toList();
 
         final alerts = _generateAlerts(mines);
-        return _buildTabContent(mines, alerts, dataLabel: 'Live Security Overview');
+        return _buildTabContent(
+          mines,
+          alerts,
+          dataLabel: 'Live Security Overview',
+          currentPosition: _currentPosition,
+          locationStatus: _locationStatus,
+          onEmergencyCall: () => _openPhoneDialer(_emergencyNumber),
+          onEmergencySms: () => _sendEmergencySms(_emergencyNumber, _emergencySmsTemplate),
+        );
       },
     );
   }
 
   Widget _buildDemoBody() {
-    final sampleMines = [
-      MineStatus(id: 'A1', mq4: '12', mq7: '8', water: 'Low', rssi: '-72', active: false, latitude: 37.4217, longitude: -122.0840),
-      MineStatus(id: 'B2', mq4: '48', mq7: '24', water: 'High', rssi: '-61', active: true, latitude: 37.4275, longitude: -122.1697),
-    ];
-    final alerts = _generateAlerts(sampleMines);
-    return _buildTabContent(sampleMines, alerts, dataLabel: 'Demo Mode Overview', demoMode: true);
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.info_outline, size: 64, color: Color(0xFFF5B700)),
-            SizedBox(height: 16),
-            Text(
-              'No mine telemetry found yet.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 12),
-            Text(
-              'Make sure your surface gateway is powered on and connected to Firebase. Once your underground nodes send data, the live status will appear here.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16),
-            ),
-          ],
-        ),
-      ),
+    return _buildTabContent(
+      [],
+      [],
+      dataLabel: 'Mine Pulse is running without a telemetry connection.',
+      currentPosition: _currentPosition,
+      locationStatus: _locationStatus,
+      onEmergencyCall: () => _openPhoneDialer(_emergencyNumber),
+      onEmergencySms: () => _sendEmergencySms(_emergencyNumber, _emergencySmsTemplate),
     );
   }
 
-  Widget _buildTabContent(List<MineStatus> mines, List<AlertEvent> alerts, {required String dataLabel, bool demoMode = false}) {
+  Widget _buildTabContent(
+    List<MineStatus> mines,
+    List<AlertEvent> alerts, {
+    required String dataLabel,
+    bool demoMode = false,
+    Position? currentPosition,
+    String? locationStatus,
+    required VoidCallback onEmergencyCall,
+    required VoidCallback onEmergencySms,
+  }) {
     switch (_selectedIndex) {
       case 0:
-        return DashboardTab(mines: mines, alerts: alerts, dataLabel: dataLabel, demoMode: demoMode);
+        return DashboardTab(
+          mines: mines,
+          alerts: alerts,
+          dataLabel: dataLabel,
+          demoMode: demoMode,
+          currentPosition: currentPosition,
+          locationStatus: locationStatus,
+          onEmergencyCall: onEmergencyCall,
+          onEmergencySms: onEmergencySms,
+        );
       case 1:
-        return MapTab(mines: mines, alerts: alerts);
-      case 2:
         return AlertsTab(alerts: alerts, mines: mines, demoMode: demoMode);
+      case 2:
+        return NodesTab(mines: mines, demoMode: demoMode);
+      case 3:
+        return AnalyticsTab(alerts: alerts, mines: mines);
+      case 4:
+        return MapTab(
+          mines: mines,
+          alerts: alerts,
+          currentPosition: currentPosition,
+          locationStatus: locationStatus,
+          onRefreshLocation: _loadCurrentLocation,
+        );
       default:
-        return const SafetyTab();
+        return SettingsTab(
+          onEmergencyCall: onEmergencyCall,
+          onEmergencySms: onEmergencySms,
+        );
     }
   }
 
@@ -315,35 +424,88 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class DashboardTab extends StatelessWidget {
-  const DashboardTab({super.key, required this.mines, required this.alerts, required this.dataLabel, required this.demoMode});
+  const DashboardTab({
+    super.key,
+    required this.mines,
+    required this.alerts,
+    required this.dataLabel,
+    required this.demoMode,
+    this.currentPosition,
+    this.locationStatus,
+    required this.onEmergencyCall,
+    required this.onEmergencySms,
+  });
 
   final List<MineStatus> mines;
   final List<AlertEvent> alerts;
   final String dataLabel;
   final bool demoMode;
+  final Position? currentPosition;
+  final String? locationStatus;
+  final VoidCallback onEmergencyCall;
+  final VoidCallback onEmergencySms;
 
   @override
   Widget build(BuildContext context) {
-    final activeAlerts = alerts.where((item) => item.severity == AlertSeverity.critical || item.severity == AlertSeverity.warning).length;
+    final activeAlerts = alerts.where((item) => item.severity == AlertSeverity.critical || item.severity == AlertSeverity.warning).toList();
     final safeMines = mines.where((mine) => !mine.active).length;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         Container(
-          decoration: BoxDecoration(color: const Color(0xFF112135), borderRadius: BorderRadius.circular(16)),
+          decoration: BoxDecoration(color: const Color(0xFF112135), borderRadius: BorderRadius.circular(18)),
           padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(dataLabel, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Text(demoMode ? 'Demo mode: no live Firebase data.' : 'Connected to live monitoring.', style: const TextStyle(fontSize: 14, color: Color(0xFF8FA6C0))),
-              const SizedBox(height: 18),
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _SummaryCard(label: 'Active alerts', value: activeAlerts.toString(), color: activeAlerts > 0 ? const Color(0xFFFF5C5C) : const Color(0xFF57D27A)),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Image.asset(
+                      'assets/app_icon_base.png',
+                      width: 72,
+                      height: 72,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Mine Pulse', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        const Text('Operational mine safety monitoring with live alert visibility.', style: TextStyle(fontSize: 15, color: Color(0xFF8FA6C0))),
+                        const SizedBox(height: 12),
+                        Text(demoMode ? 'Demo mode: no live Firebase data.' : 'Connected to live monitoring.', style: const TextStyle(fontSize: 14, color: Color(0xFFB0C5E2))),
+                        if (locationStatus != null) ...[
+                          const SizedBox(height: 12),
+                          Text(locationStatus!, style: const TextStyle(fontSize: 14, color: Color(0xFFB0C5E2))),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: Image.asset(
+                  'assets/dashboard_hero.png',
+                  fit: BoxFit.cover,
+                  height: 160,
+                  width: double.infinity,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  _SummaryCard(label: 'Active alerts', value: activeAlerts.length.toString(), color: activeAlerts.isNotEmpty ? const Color(0xFFFF5C5C) : const Color(0xFF57D27A)),
                   _SummaryCard(label: 'Safe nodes', value: safeMines.toString(), color: const Color(0xFF57D27A)),
                   _SummaryCard(label: 'Total nodes', value: mines.length.toString(), color: const Color(0xFF5C9BFF)),
                 ],
@@ -352,29 +514,121 @@ class DashboardTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
-        const Text('Critical Alerts', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 10),
-        ...alerts.take(3).map((alert) => AlertTile(alert: alert)),
+        if (mines.isEmpty)
+          const Card(
+            color: Color(0xFF111A28),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(16))),
+            child: const Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text('No devices connected', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  SizedBox(height: 8),
+                  Text('Your phone location is available on the Map tab. Live mine telemetry will appear here once your gateway and underground nodes connect.', style: TextStyle(color: Colors.white70, fontSize: 15)),
+                ],
+              ),
+            ),
+          ),
+        const SizedBox(height: 18),
+        EmergencyActionsCard(onCall: onEmergencyCall, onSms: onEmergencySms),
+        const SizedBox(height: 22),
+        if (activeAlerts.isNotEmpty) ...[
+          const Text('Active Alerts', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          ...activeAlerts.take(3).map((alert) => AlertTile(alert: alert)),
+        ] else
+          Card(
+            color: const Color(0xFF111A28),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('No active alerts detected. The mine network is stable or not yet connected.', style: TextStyle(color: Colors.white70, fontSize: 15)),
+            ),
+          ),
         const SizedBox(height: 22),
         const Text('Mine Telemetry', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 10),
-        ...mines.map((mine) => MineCard(status: mine)),
+        if (mines.isNotEmpty)
+          ...mines.map((mine) => MineCard(status: mine))
+        else
+          Card(
+            color: const Color(0xFF111A28),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('No telemetry records are available until underground nodes connect to the surface gateway.', style: TextStyle(color: Colors.white70, fontSize: 15)),
+            ),
+          ),
       ],
     );
   }
 }
 
 class MapTab extends StatelessWidget {
-  const MapTab({super.key, required this.mines, required this.alerts});
+  const MapTab({
+    super.key,
+    required this.mines,
+    required this.alerts,
+    this.currentPosition,
+    this.locationStatus,
+    required this.onRefreshLocation,
+  });
 
   final List<MineStatus> mines;
   final List<AlertEvent> alerts;
+  final Position? currentPosition;
+  final String? locationStatus;
+  final Future<void> Function() onRefreshLocation;
 
   @override
   Widget build(BuildContext context) {
-    final center = mines.isNotEmpty
-        ? LatLng(mines.first.latitude, mines.first.longitude)
-        : LatLng(37.4275, -122.1697);
+    final center = currentPosition != null
+        ? LatLng(currentPosition!.latitude, currentPosition!.longitude)
+        : mines.isNotEmpty
+            ? LatLng(mines.first.latitude, mines.first.longitude)
+            : LatLng(37.4275, -122.1697);
+
+    final markers = mines.map((mine) {
+      final isAlert = alerts.any((alert) => alert.mineId == mine.id && alert.severity != AlertSeverity.safe);
+      return Marker(
+        width: 120,
+        height: 110,
+        point: LatLng(mine.latitude, mine.longitude),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(isAlert ? Icons.location_on : Icons.location_on_outlined, color: isAlert ? Colors.redAccent : Colors.lightBlueAccent, size: 38),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: const BoxDecoration(color: Color(0xFF0F1D2C), borderRadius: BorderRadius.all(Radius.circular(8))),
+              child: Text('Node ${mine.id}', style: const TextStyle(color: Colors.white, fontSize: 12)),
+            ),
+          ],
+        ),
+      );
+    }).toList();
+
+    if (currentPosition != null) {
+      markers.add(
+        Marker(
+          width: 120,
+          height: 110,
+          point: LatLng(currentPosition!.latitude, currentPosition!.longitude),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.my_location, color: Color(0xFF57D27A), size: 38),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: const BoxDecoration(color: Color(0xFF0F1D2C), borderRadius: BorderRadius.all(Radius.circular(8))),
+                child: const Text('You', style: TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Column(
       children: [
@@ -387,37 +641,33 @@ class MapTab extends StatelessWidget {
                 subdomains: const ['a', 'b', 'c'],
                 userAgentPackageName: 'com.example.subterraguard',
               ),
-              MarkerLayer(
-                markers: mines.map((mine) {
-                  final isAlert = alerts.any((alert) => alert.mineId == mine.id && alert.severity != AlertSeverity.safe);
-                  return Marker(
-                    width: 120,
-                    height: 110,
-                    point: LatLng(mine.latitude, mine.longitude),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(isAlert ? Icons.location_on : Icons.location_on_outlined, color: isAlert ? Colors.redAccent : Colors.lightBlueAccent, size: 38),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(color: const Color(0xFF0F1D2C), borderRadius: BorderRadius.circular(8)),
-                          child: Text('Node ${mine.id}', style: const TextStyle(color: Colors.white, fontSize: 12)),
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
+              MarkerLayer(markers: markers),
             ],
           ),
         ),
         Container(
           color: const Color(0xFF08121F),
           padding: const EdgeInsets.all(16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: const [
-              Text('Map shows active node locations and hazard markers.', style: TextStyle(color: Colors.white70)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Expanded(child: Text('Live map shows your phone and mine node locations with real positioning.', style: TextStyle(color: Colors.white70))),
+                  IconButton(
+                    icon: const Icon(Icons.my_location, color: Color(0xFFF5B700)),
+                    tooltip: 'Refresh device location',
+                    onPressed: () async => await onRefreshLocation(),
+                  ),
+                ],
+              ),
+              if (locationStatus != null) ...[
+                const SizedBox(height: 8),
+                Text(locationStatus!, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+              ],
+              const SizedBox(height: 8),
+              const Text('Emergency actions are available in the Safety tab.', style: TextStyle(color: Colors.white70)),
             ],
           ),
         ),
@@ -435,6 +685,9 @@ class AlertsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final activeAlerts = alerts.where((item) => item.severity == AlertSeverity.critical || item.severity == AlertSeverity.warning).toList();
+    final history = alerts.reversed.toList();
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -444,12 +697,43 @@ class AlertsTab extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(color: const Color(0xFF112A41), borderRadius: BorderRadius.circular(14)),
-            child: const Text('Demo mode: These notifications represent how SubterraGuard surfaces warnings, hazards, and operational alerts.', style: TextStyle(color: Color(0xFFB0C5E2))),
+            child: const Text('Demo mode: These notifications represent how Mine Pulse surfaces warnings, hazards, and operational alerts.', style: TextStyle(color: Color(0xFFB0C5E2))),
           ),
         const SizedBox(height: 12),
-        ...alerts.map((alert) => AlertTile(alert: alert)),
+        if (activeAlerts.isEmpty)
+          const Text('All systems stable. No active danger alerts at this time.', style: TextStyle(fontSize: 16, color: Colors.white70)),
+        ...activeAlerts.map((alert) => AlertTile(alert: alert)),
+        const SizedBox(height: 18),
+        ElevatedButton.icon(
+          onPressed: () {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('All active alerts acknowledged.')));
+          },
+          icon: const Icon(Icons.check_circle_outline),
+          label: const Text('Acknowledge Alerts'),
+        ),
         const SizedBox(height: 24),
-        const Text('Message Feed', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const Text('Alert History', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        ...history.take(5).map((alert) => Card(
+              color: const Color(0xFF111A28),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(alert.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Text('Node ${alert.mineId} · ${alert.severity}', style: const TextStyle(color: Color(0xFF8FA6C0))),
+                    const SizedBox(height: 8),
+                    Text(alert.description, style: const TextStyle(color: Colors.white70)),
+                  ],
+                ),
+              ),
+            )),
+        const SizedBox(height: 24),
+        const Text('SMS Alert Logs', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 10),
         ..._buildMessageFeed(),
       ],
@@ -458,10 +742,9 @@ class AlertsTab extends StatelessWidget {
 
   List<Widget> _buildMessageFeed() {
     final messages = [
-      'Surface command confirmed connection to underground node A1.',
-      'Scheduled safety inspection due in 12 minutes at shaft access point.',
-      'Alert notification created for elevated methane in section B2.',
-      'Emergency ventilation protocols are ready for deployment.',
+      'SMS sent to control center: A1 methane warning.',
+      'SMS delivered to rescue team: Node B2 status update.',
+      'Supervisor acknowledged the last alert at 14:12.',
     ];
     return messages
         .map((message) => Card(
@@ -477,35 +760,416 @@ class AlertsTab extends StatelessWidget {
   }
 }
 
-class SafetyTab extends StatelessWidget {
-  const SafetyTab({super.key});
+class NodesTab extends StatelessWidget {
+  const NodesTab({super.key, required this.mines, required this.demoMode});
+
+  final List<MineStatus> mines;
+  final bool demoMode;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text('Safety Methods', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const Text('Node Monitoring', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        if (demoMode)
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: const Color(0xFF112A41), borderRadius: BorderRadius.circular(14)),
+            child: const Text('Demo mode active. These nodes display sample telemetry for Mine Pulse monitoring.', style: TextStyle(color: Color(0xFFB0C5E2))),
+          ),
         const SizedBox(height: 14),
-        const Text('SubterraGuard guides operators through hazard detection, response, and post-incident review with clear procedures.', style: TextStyle(fontSize: 16, color: Color(0xFFB0C5E2))),
+        ...mines.map((mine) => _NodeStatusCard(node: mine)),
+      ],
+    );
+  }
+}
+
+class _NodeStatusCard extends StatelessWidget {
+  const _NodeStatusCard({required this.node});
+
+  final MineStatus node;
+
+  Color get batteryColor {
+    final batteryLevel = int.tryParse(node.battery.replaceAll(RegExp('[^0-9]'), '')) ?? 0;
+    if (batteryLevel >= 75) return const Color(0xFF57D27A);
+    if (batteryLevel >= 40) return const Color(0xFFFFC107);
+    return const Color(0xFFFF5C5C);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF111A28),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Node ${node.id.toUpperCase()}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Chip(
+                  backgroundColor: node.active ? const Color(0xFFFF5C5C) : const Color(0xFF57D27A),
+                  label: Text(node.active ? 'ALERT' : 'SAFE'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text('Methane: ${node.mq4} ppm', style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 6),
+            Text('Carbon monoxide: ${node.mq7} ppm', style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 6),
+            Text('Water level: ${node.water}', style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 6),
+            Text('Signal RSSI: ${node.rssi} dBm', style: const TextStyle(fontSize: 16, color: Color(0xFF8FA6C0))),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Text('Battery: ${node.battery}', style: TextStyle(fontSize: 16, color: batteryColor, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
+                Flexible(child: Text('Position: ${node.latitude.toStringAsFixed(4)}, ${node.longitude.toStringAsFixed(4)}', style: const TextStyle(fontSize: 14, color: Colors.white70))),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AnalyticsTab extends StatelessWidget {
+  const AnalyticsTab({super.key, required this.alerts, required this.mines});
+
+  final List<AlertEvent> alerts;
+  final List<MineStatus> mines;
+
+  @override
+  Widget build(BuildContext context) {
+    final critical = alerts.where((alert) => alert.severity == AlertSeverity.critical).length;
+    final warning = alerts.where((alert) => alert.severity == AlertSeverity.warning).length;
+    final info = alerts.where((alert) => alert.severity == AlertSeverity.info).length;
+    final total = alerts.length;
+    final methaneAlerts = alerts.where((alert) => alert.title.toLowerCase().contains('methane')).length;
+    final carbonAlerts = alerts.where((alert) => alert.title.toLowerCase().contains('carbon')).length;
+    final waterAlerts = alerts.where((alert) => alert.title.toLowerCase().contains('water')).length;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('Analytics', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        const Text('Real-time graphs and key trends for the mine safety network.', style: TextStyle(fontSize: 16, color: Color(0xFFB0C5E2))),
         const SizedBox(height: 18),
-        _SafetyCard(
-          title: 'Alert Detection',
-          description: 'Monitor methane, carbon monoxide, water ingress, and signal quality continuously. Auto-generated alerts show the most critical risks first.',
+        Row(
+          children: [
+            Expanded(child: _SummaryCard(label: 'Critical', value: critical.toString(), color: const Color(0xFFFF5C5C))),
+            Expanded(child: _SummaryCard(label: 'Warning', value: warning.toString(), color: const Color(0xFFFFC107))),
+            Expanded(child: _SummaryCard(label: 'Info', value: info.toString(), color: const Color(0xFF5C9BFF))),
+          ],
         ),
-        _SafetyCard(
-          title: 'Response Actions',
-          description: 'When an alert appears, stop operations in the affected sector, move personnel to safe zones, and confirm ventilation status before resuming work.',
-        ),
-        _SafetyCard(
-          title: 'Communication',
-          description: 'Use the message feed and alert center to notify field teams and surface control immediately when a hazard is detected.',
-        ),
-        _SafetyCard(
-          title: 'Recovery',
-          description: 'Document each incident, verify that sensors return to safe ranges, and restore equipment only after a formal clearance check.',
+        const SizedBox(height: 22),
+        const Text('Alert Trends', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        _TrendBar(label: 'Methane', value: methaneAlerts, color: const Color(0xFFFF7043)),
+        _TrendBar(label: 'Carbon Monoxide', value: carbonAlerts, color: const Color(0xFF42A5F5)),
+        _TrendBar(label: 'Water', value: waterAlerts, color: const Color(0xFF66BB6A)),
+        const SizedBox(height: 22),
+        const Text('Node Signal Distribution', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        ...mines.map((mine) => _SignalTrendRow(node: mine)),
+        const SizedBox(height: 22),
+        const Text('Activity Summary', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Card(
+          color: const Color(0xFF111A28),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Weekly reports estimate network performance and alert patterns using current telemetry.', style: TextStyle(color: Colors.white70)),
+                const SizedBox(height: 14),
+                Text('Tracked nodes: ${mines.length}', style: const TextStyle(fontSize: 16)),
+                const SizedBox(height: 6),
+                Text('Total alerts: $total', style: const TextStyle(fontSize: 16)),
+              ],
+            ),
+          ),
         ),
       ],
+    );
+  }
+}
+
+class SettingsTab extends StatefulWidget {
+  const SettingsTab({super.key, required this.onEmergencyCall, required this.onEmergencySms});
+
+  final VoidCallback onEmergencyCall;
+  final VoidCallback onEmergencySms;
+
+  @override
+  State<SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<SettingsTab> {
+  bool _pushAlerts = true;
+  bool _smsAlerts = true;
+  bool _liveMap = true;
+  final TextEditingController _emergencyNumberController = TextEditingController(text: '112');
+  final TextEditingController _methaneThresholdController = TextEditingController(text: '35');
+  final TextEditingController _coThresholdController = TextEditingController(text: '18');
+
+  @override
+  void dispose() {
+    _emergencyNumberController.dispose();
+    _methaneThresholdController.dispose();
+    _coThresholdController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('System Settings', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'Alert Thresholds',
+          children: [
+            TextField(
+              controller: _methaneThresholdController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Methane threshold (ppm)'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _coThresholdController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'CO threshold (ppm)'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'Emergency Contacts',
+          children: [
+            TextField(
+              controller: _emergencyNumberController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Primary SMS number'),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.call),
+                    label: const Text('Quick SOS'),
+                    onPressed: widget.onEmergencyCall,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.message),
+                    label: const Text('Send SMS'),
+                    onPressed: widget.onEmergencySms,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'Operational Controls',
+          children: [
+            SwitchListTile(
+              title: const Text('Push notifications'),
+              value: _pushAlerts,
+              onChanged: (value) => setState(() => _pushAlerts = value),
+            ),
+            SwitchListTile(
+              title: const Text('SMS alerts'),
+              value: _smsAlerts,
+              onChanged: (value) => setState(() => _smsAlerts = value),
+            ),
+            SwitchListTile(
+              title: const Text('Live map updates'),
+              value: _liveMap,
+              onChanged: (value) => setState(() => _liveMap = value),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'User Management',
+          children: [
+            const ListTile(
+              title: Text('Supervisor'),
+              subtitle: Text('supervisor@minepulse.local'),
+              leading: Icon(Icons.person_outline),
+            ),
+            const ListTile(
+              title: Text('Field operator'),
+              subtitle: Text('operator@minepulse.local'),
+              leading: Icon(Icons.person_outline),
+            ),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.person_add),
+              label: const Text('Add user'),
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User management will be added in the next version.')));
+              },
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({required this.title, required this.children});
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF111A28),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrendBar extends StatelessWidget {
+  const _TrendBar({required this.label, required this.value, required this.color});
+
+  final String label;
+  final int value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 16)),
+            Text(value.toString(), style: const TextStyle(color: Colors.white70)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Container(
+          height: 12,
+          decoration: BoxDecoration(color: const Color(0xFF0F1D2C), borderRadius: BorderRadius.circular(8)),
+          child: FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: value > 0 ? (value / (value + 5)).clamp(0.1, 1.0) : 0.05,
+            child: Container(decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(8))),
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+}
+
+class _SignalTrendRow extends StatelessWidget {
+  const _SignalTrendRow({required this.node});
+
+  final MineStatus node;
+
+  @override
+  Widget build(BuildContext context) {
+    final rssi = int.tryParse(node.rssi.replaceAll(RegExp('[^0-9-]'), '')) ?? -100;
+    final signalStrength = ((rssi + 120) / 60).clamp(0.0, 1.0);
+    return Card(
+      color: const Color(0xFF111A28),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Node ${node.id.toUpperCase()}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('Signal quality: ${node.rssi} dBm', style: const TextStyle(color: Colors.white70)),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: signalStrength, color: const Color(0xFF5C9BFF), backgroundColor: const Color(0xFF0F1D2C)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class EmergencyActionsCard extends StatelessWidget {
+  const EmergencyActionsCard({super.key, required this.onCall, required this.onSms});
+
+  final VoidCallback onCall;
+  final VoidCallback onSms;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF111A28),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Emergency Contact', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            const Text('Use the emergency call or message actions below to notify surface command and rescue teams immediately.', style: TextStyle(fontSize: 16, color: Colors.white70)),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.call),
+                    label: const Text('Call'),
+                    onPressed: onCall,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.message),
+                    label: const Text('Message'),
+                    onPressed: onSms,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -519,19 +1183,17 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        margin: const EdgeInsets.only(right: 8),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: color.withAlpha((color.a * 255.0 * 0.16).round().clamp(0, 255)), borderRadius: BorderRadius.circular(16)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(color: Colors.white70)),
-            const SizedBox(height: 8),
-            Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.bold)),
-          ],
-        ),
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: color.withAlpha((color.a * 255.0 * 0.16).round().clamp(0, 255)), borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white70)),
+          const SizedBox(height: 8),
+          Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.bold)),
+        ],
       ),
     );
   }
@@ -598,32 +1260,6 @@ class AlertTile extends StatelessWidget {
   }
 }
 
-class _SafetyCard extends StatelessWidget {
-  const _SafetyCard({required this.title, required this.description});
-
-  final String title;
-  final String description;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: const Color(0xFF111A28),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            Text(description, style: const TextStyle(fontSize: 16, color: Colors.white70)),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class MineStatus {
   MineStatus({
@@ -632,6 +1268,7 @@ class MineStatus {
     required this.mq7,
     required this.water,
     required this.rssi,
+    this.battery = 'Unknown',
     required this.active,
     this.latitude = 37.4275,
     this.longitude = -122.1697,
@@ -642,6 +1279,7 @@ class MineStatus {
   final String mq7;
   final String water;
   final String rssi;
+  final String battery;
   final bool active;
   final double latitude;
   final double longitude;
@@ -680,6 +1318,8 @@ class MineCard extends StatelessWidget {
             Text('Water level: ${status.water}', style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 8),
             Text('Signal RSSI: ${status.rssi} dBm', style: const TextStyle(color: Color(0xFF8FA6C0))),
+            const SizedBox(height: 8),
+            Text('Battery: ${status.battery}', style: const TextStyle(fontSize: 16, color: Color(0xFF57D27A))),
           ],
         ),
       ),

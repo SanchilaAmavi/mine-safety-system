@@ -1,11 +1,11 @@
 {
-    "name": "SubterraGuard Pro",
-    "short_name": "SubterraGuard",
+    "name": "Mine Pulse",
+    "short_name": "Mine Pulse",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#01192F",
     "theme_color": "#F5B700",
-    "description": "SubterraGuard Pro: professional mine safety monitoring mobile app.",
+    "description": "Mine Pulse: professional mine safety monitoring mobile app.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

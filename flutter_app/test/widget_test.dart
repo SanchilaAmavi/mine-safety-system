@@ -7,13 +7,13 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:subterraguard/main.dart';
+import 'package:mine_pulse/main.dart';
 
 void main() {
-  testWidgets('SubterraGuard app loads in demo mode', (WidgetTester tester) async {
-    await tester.pumpWidget(const SubterraGuardApp(firebaseAvailable: false));
+  testWidgets('Mine Pulse app loads and shows dashboard', (WidgetTester tester) async {
+    await tester.pumpWidget(const MinePulseApp(firebaseAvailable: false));
 
-    expect(find.text('SubterraGuard Demo Mode'), findsOneWidget);
-    expect(find.text('Demo mode: no live Firebase data.'), findsOneWidget);
+    expect(find.text('Mine Pulse'), findsOneWidget);
+    expect(find.text('Dashboard'), findsOneWidget);
   });
 }

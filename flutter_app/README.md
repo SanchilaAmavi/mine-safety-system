@@ -1,6 +1,6 @@
-# subterraguard
+# Mine Pulse
 
-A new Flutter project.
+A professional mine safety monitoring Flutter application.
 
 ## Getting Started
 

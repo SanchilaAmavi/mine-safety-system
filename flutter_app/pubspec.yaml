@@ -1,5 +1,5 @@
-name: subterraguard
-description: "SubterraGuard Pro: Professional mine safety mobile monitoring app."
+name: mine_pulse
+description: "Mine Pulse: Professional mine safety monitoring mobile app."
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -16,11 +16,22 @@ dependencies:
   flutter_local_notifications: ^21.0.0
   flutter_map: ^8.3.0
   latlong2: ^0.9.0
+  geolocator: ^9.0.2
+  url_launcher: ^6.1.10
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.13.1
 
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "../favicon.jpeg"
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/app_icon_base.png
+    - assets/dashboard_hero.png
