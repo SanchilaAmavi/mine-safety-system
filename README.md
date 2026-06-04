@@ -117,20 +117,4 @@ The `cloud_functions/` folder includes a sample function that sends topic notifi
 - `flutter_app/` � Flutter mobile app source code
 - `assets/` � Brand logo and illustrations
 
-## Academic Submission Advice
 
-- Add screenshots of the dashboard and app in the final report.
-- Include a block diagram showing data flow between underground nodes, surface gateway, Firebase, web dashboard, and mobile app.
-- Emphasize safety benefits: instant alerts, remote monitoring, and multiple notification channels.
-- Use the project branding consistently in slides and documentation.
-
-## GitHub About Field
-
-`IoT mine hazard alert system with ESP32-S3, LoRa, GSM, Firebase, Flutter, and real-time dashboard.`
-
-## Next Steps
-
-1. Complete and test the Firebase integration.
-2. Deploy the web dashboard to Firebase Hosting.
-3. Configure Flutter with Firebase and push notifications.
-4. Add final images and screenshots to the repository.
