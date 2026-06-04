@@ -1,8 +1,4 @@
-# SubterraGuard: Smart Mine Safety System
-
-**Repository Name:** `subterraguard-mine-safety`
-
-**Short Description:** Multi-node IoT mine safety monitoring system using ESP32-S3, LoRa, GSM, Firebase, Flutter and a real-time web dashboard.
+# Mine Pulse: Smart Mine Safety System
 
 ## Project Summary
 
