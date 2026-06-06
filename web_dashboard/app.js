@@ -2,13 +2,13 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.6.0/firebas
 import { getDatabase, ref, onValue } from 'https://www.gstatic.com/firebasejs/10.6.0/firebase-database.js';
 
 const firebaseConfig = {
-  apiKey: '<API_KEY>',
-  authDomain: '<PROJECT_ID>.firebaseapp.com',
-  databaseURL: 'https://<PROJECT_ID>.default-rtdb.firebaseio.com',
-  projectId: '<PROJECT_ID>',
-  storageBucket: '<PROJECT_ID>.appspot.com',
-  messagingSenderId: '<SENDER_ID>',
-  appId: '<APP_ID>'
+  apiKey: 'AIzaSyAdcl_IWkukKlA17vjJlNFoZtej2H_7brY',
+  authDomain: 'mine-pulse.firebaseapp.com',
+  databaseURL: 'https://mine-pulse-default-rtdb.firebaseio.com',
+  projectId: 'mine-pulse',
+  storageBucket: 'mine-pulse.appspot.com',
+  messagingSenderId: '124181657638',
+  appId: '1:124181657638:web:0952026408e42efb9e8ee7'
 };
 
 const app = initializeApp(firebaseConfig);
@@ -18,18 +18,94 @@ const statusContainer = document.getElementById('mineStatusCards');
 const alertHistory = document.getElementById('alertHistory');
 const lastUpdatedText = document.getElementById('lastUpdated');
 const connectionStatus = document.getElementById('connectionStatus');
-const summaryCard = document.getElementById('summaryCard');
+const metricActiveAlerts = document.getElementById('activeAlerts');
+const metricSafeNodes = document.getElementById('safeNodes');
+const metricTotalNodes = document.getElementById('totalNodes');
+const dashboardContent = document.getElementById('dashboardContent');
+let statusListener = null;
+let alertsListener = null;
 
 function formatTime(timestamp) {
   const date = new Date(timestamp);
   return date.toLocaleString();
 }
 
+function setDashboardVisible(visible) {
+  if (!dashboardContent) return;
+  dashboardContent.classList.toggle('hidden', !visible);
+}
+
+
+function clearDashboard() {
+  statusContainer.innerHTML = '';
+  alertHistory.innerHTML = '';
+  metricActiveAlerts.textContent = '0';
+  metricSafeNodes.textContent = '0';
+  metricTotalNodes.textContent = '0';
+  connectionStatus.textContent = 'Signed out. Please sign in to view live data.';
+  lastUpdatedText.textContent = '';
+}
+
+function subscribeToDatabase() {
+  if (statusListener || alertsListener) return;
+
+  statusListener = onValue(ref(db, 'status'), (snapshot) => {
+    const value = snapshot.val() || {};
+    statusContainer.innerHTML = '';
+
+    const mineIds = ['mine1', 'mine2'];
+    mineIds.forEach((mineId) => {
+      const mine = value[mineId] || {};
+      statusContainer.appendChild(renderMineCard(mineId.replace('mine', ''), mine));
+    });
+
+    updateMetrics(value);
+    connectionStatus.textContent = 'Connected to Firebase';
+    lastUpdatedText.textContent = `Updated at ${new Date().toLocaleTimeString()}`;
+  });
+
+  alertsListener = onValue(ref(db, 'alerts'), (snapshot) => {
+    const value = snapshot.val() || {};
+    alertHistory.innerHTML = '';
+
+    ['mine1', 'mine2'].forEach((mineId) => {
+      const mineAlerts = value[mineId];
+      if (!mineAlerts || !mineAlerts.history) return;
+      const items = Object.values(mineAlerts.history).slice(-6).reverse();
+      items.forEach((alert) => {
+        alertHistory.appendChild(renderAlertEvent(mineId.replace('mine', ''), alert));
+      });
+    });
+  });
+}
+
+function unsubscribeFromDatabase() {
+  if (statusListener) {
+    statusListener();
+    statusListener = null;
+  }
+  if (alertsListener) {
+    alertsListener();
+    alertsListener = null;
+  }
+  clearDashboard();
+}
+
+function updateMetrics(statusData) {
+  const mineIds = ['mine1', 'mine2'];
+  const mines = mineIds.map((mineId) => statusData[mineId] || {});
+  const active = mines.filter((node) => node.inAlert).length;
+  const safe = mines.filter((node) => !node.inAlert).length;
+  metricActiveAlerts.textContent = String(active);
+  metricSafeNodes.textContent = String(safe);
+  metricTotalNodes.textContent = String(mineIds.length);
+}
+
 function renderMineCard(nodeId, data) {
   const card = document.createElement('div');
   card.className = 'status-card';
 
-  const title = document.createElement('h2');
+  const title = document.createElement('h3');
   title.textContent = `Mine ${nodeId}`;
   card.appendChild(title);
 
@@ -39,7 +115,7 @@ function renderMineCard(nodeId, data) {
   card.appendChild(badge);
 
   const list = document.createElement('div');
-  list.className = 'detail-list';
+  list.className = 'stat-row';
   list.innerHTML = `
     <div><strong>MQ-4:</strong> ${data.mq4 ?? 'N/A'}</div>
     <div><strong>MQ-7:</strong> ${data.mq7 ?? 'N/A'}</div>
@@ -72,36 +148,11 @@ function renderAlertEvent(nodeId, alert) {
   return row;
 }
 
-onValue(ref(db, 'status'), (snapshot) => {
-  const value = snapshot.val() || {};
-  statusContainer.innerHTML = '';
-
-  const mineIds = ['mine1', 'mine2'];
-  mineIds.forEach((mineId) => {
-    const mine = value[mineId] || {};
-    statusContainer.appendChild(renderMineCard(mineId.replace('mine', ''), mine));
-  });
-
-  connectionStatus.textContent = 'Connected to Firebase';
-  lastUpdatedText.textContent = `Updated at ${new Date().toLocaleTimeString()}`;
-});
-
-onValue(ref(db, 'alerts'), (snapshot) => {
-  const value = snapshot.val() || {};
-  alertHistory.innerHTML = '';
-
-  ['mine1', 'mine2'].forEach((mineId) => {
-    const mineAlerts = value[mineId];
-    if (!mineAlerts || !mineAlerts.history) return;
-    const items = Object.values(mineAlerts.history).slice(-6).reverse();
-    items.forEach((alert) => {
-      alertHistory.appendChild(renderAlertEvent(mineId.replace('mine', ''), alert));
-    });
-  });
-});
+subscribeToDatabase();
 
 window.setTimeout(() => {
-  if (!connectionStatus.textContent) {
+  if (!connectionStatus.textContent || connectionStatus.textContent === 'Waiting for Firebase...') {
     connectionStatus.textContent = 'Waiting for Firebase connection...';
   }
 }, 2000);
+

@@ -3,67 +3,109 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SubterraGuard Dashboard</title>
+  <title>Mine Pulse Dashboard</title>
   <style>
     :root {
-      --bg: #07111f;
-      --panel: #0f1c2f;
-      --surface: #15243e;
-      --text: #eef4ff;
-      --muted: #91a8c3;
-      --accent: #f5b700;
-      --danger: #ff5c5c;
-      --success: #57d27a;
+      --bg: #eaf3ff;
+      --panel: #ffffff;
+      --surface: #ffffff;
+      --text: #12263f;
+      --muted: #5f738f;
+      --accent: #1e56ff;
+      --accent-soft: rgba(30, 86, 255, 0.12);
+      --danger: #d92f2f;
+      --success: #2a8f4f;
+      --border: rgba(16, 52, 92, 0.08);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #0c1f38 0%, #07111f 55%, #020815 100%); color: var(--text); font-family: Inter, system-ui, sans-serif; }
-    header { padding: 28px 24px; display: flex; align-items: center; gap: 18px; }
-    header img { width: 56px; height: 56px; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, rgba(30,86,255,0.14), transparent 24%), radial-gradient(circle at bottom right, rgba(34,198,255,0.12), transparent 20%), #eef5ff; color: var(--text); font-family: Inter, system-ui, sans-serif; }
+    main { max-width: 1180px; margin: 0 auto; padding-bottom: 40px; }
+    header { padding: 32px 24px 18px; display: flex; align-items: center; gap: 18px; }
+    header img { width: 56px; height: 56px; border-radius: 16px; object-fit: cover; }
     header .brand { display: grid; gap: 6px; }
-    header .brand h1 { margin: 0; font-size: 1.6rem; }
-    header .brand p { margin: 0; color: var(--muted); max-width: 660px; }
+    header .brand h1 { margin: 0; font-size: 1.8rem; letter-spacing: -0.03em; }
+    header .brand p { margin: 0; color: var(--muted); max-width: 660px; line-height: 1.6; }
     main { padding: 0 24px 40px; }
     .top-panel { display: grid; gap: 18px; grid-template-columns: 1.8fr 1fr; margin-bottom: 28px; }
-    .panel { background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 24px; padding: 24px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 24px 54px rgba(16, 52, 92, 0.08); }
     .panel h2 { margin: 0 0 12px; font-size: 1.05rem; letter-spacing: 0.03em; color: var(--accent); }
     .panel p { margin: 0; color: var(--muted); line-height: 1.75; }
     .status-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 28px; }
-    .status-card { background: var(--surface); border: 1px solid rgba(255,255,255,0.08); border-radius: 22px; padding: 22px; min-height: 220px; }
-    .status-card h3 { margin: 0 0 10px; font-size: 1.1rem; }
-    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; font-size: 0.95rem; }
-    .badge-danger { background: rgba(255,92,92,0.16); color: var(--danger); }
-    .badge-success { background: rgba(87,210,122,0.16); color: var(--success); }
+    .status-card { background: var(--surface); border: 1px solid var(--border); border-radius: 22px; padding: 24px; min-height: 220px; box-shadow: 0 20px 42px rgba(16, 52, 92, 0.08); transition: transform 0.18s ease; }
+    .status-card:hover { transform: translateY(-2px); }
+    .status-card h3 { margin: 0 0 10px; font-size: 1.1rem; color: var(--text); }
+    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; font-size: 0.95rem; font-weight: 600; }
+    .badge-danger { background: rgba(214,40,40,0.12); color: var(--danger); }
+    .badge-success { background: rgba(35,134,54,0.16); color: var(--success); }
     .stat-row { display: grid; gap: 10px; margin-top: 16px; }
     .stat-row div { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.95rem; }
-    .alert-list { display: grid; gap: 14px; }
-    .alert-item { background: rgba(255,255,255,0.04); border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); padding: 18px; }
-    .alert-item h4 { margin: 0 0 8px; font-size: 1rem; }
-    .alert-item small { color: var(--muted); }
-    footer { text-align: center; color: var(--muted); font-size: 0.95rem; margin-top: 24px; }
+    .metric-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 28px; }
+    .metric-card { background: #FFFFFF; border: 1px solid var(--border); border-radius: 20px; padding: 22px; box-shadow: 0 18px 40px rgba(16, 52, 92, 0.05); }
+    .metric-card h3 { margin: 0; font-size: 0.95rem; color: var(--muted); letter-spacing: 0.03em; }
+    .metric-card p { margin: 12px 0 0; font-size: 2rem; color: var(--text); font-weight: 800; }
+    .auth-card { background: linear-gradient(180deg, rgba(255,255,255,0.96), #ffffff); border: 1px solid rgba(255,255,255,0.7); border-radius: 28px; padding: 32px; margin-bottom: 32px; box-shadow: 0 36px 90px rgba(16, 52, 92, 0.10); backdrop-filter: blur(10px); }
+    .auth-card h2 { margin: 0 0 16px; font-size: 1.1rem; letter-spacing: 0.03em; color: #1745d4; }
+    .auth-card input { width: 100%; border: 1px solid rgba(16, 52, 92, 0.12); border-radius: 16px; padding: 16px 18px; margin-top: 10px; font-size: 1rem; color: var(--text); background: #f5faff; }
+    .auth-actions { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 18px; }
+    .auth-actions button { flex: 1 1 160px; border: none; border-radius: 16px; padding: 16px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease; }
+    .auth-actions button:hover { transform: translateY(-2px); box-shadow: 0 18px 40px rgba(16, 52, 92, 0.12); }
+    .auth-actions .primary { background: var(--accent); color: white; }
+    .auth-actions .secondary { background: #f4f8ff; color: var(--text); border: 1px solid rgba(16, 52, 92, 0.12); }
+    .auth-actions .google { background: #4285f4; color: white; box-shadow: inset 0 -1px 0 rgba(255,255,255,0.18); }
+    .sign-out { width: 100%; margin-top: 14px; }
+    .auth-message { margin-top: 16px; color: var(--danger); }
+    .hidden { display: none !important; }
+    .signed-in { margin-top: 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .signed-in span { color: var(--text); font-weight: 600; }
+    .sign-out { background: #FFECEB; color: var(--danger); border: 1px solid rgba(214, 40, 40, 0.18); }
+    .settings-panel { display: grid; gap: 14px; margin-top: 10px; }
+    .history-item { background: #F8FBFF; border-radius: 16px; border: 1px solid var(--border); padding: 18px; }
+    .history-header { margin: 0 0 8px; font-size: 1rem; color: var(--text); font-weight: 700; }
+    .history-details { display: grid; gap: 8px; color: var(--text); font-size: 0.95rem; }
+    footer { text-align: center; color: var(--muted); font-size: 0.95rem; margin-top: 32px; }
+    .hidden { display: none !important; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    #dashboardContent { animation: fadeIn 0.45s ease both; }
     @media (max-width: 900px) { .top-panel { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <header>
-    <img src="./assets/hero.svg" alt="SubterraGuard" />
+    <img src="./assets/favicon" alt="Mine Pulse" />
     <div class="brand">
-      <h1>SubterraGuard Dashboard</h1>
-      <p>Real-time mine safety monitoring with live Firebase alerts, SMS emergency notification, and multi-node status tracking.</p>
+      <h1>Mine Pulse Dashboard</h1>
+      <p>Live mine safety operations, sensor status, and hazard alerts from your Firebase-connected field network.</p>
     </div>
   </header>
 
   <main>
-    <div class="top-panel">
-      <section class="panel">
-        <h2>Live Application Status</h2>
-        <p>Surface gateway data is streamed through Firebase Realtime Database. This dashboard updates automatically whenever the surface node sends sensor alerts.</p>
-      </section>
-      <section class="panel">
-        <h2>Connection</h2>
-        <p id="connectionStatus">Waiting for Firebase...</p>
-        <p id="lastUpdated" style="margin-top: 12px; color: var(--muted);">No data loaded yet.</p>
-      </section>
-    </div>
+    <div id="dashboardContent">
+      <div class="top-panel">
+        <section class="panel">
+          <h2>Live Application Status</h2>
+          <p>Surface gateway data is streamed through Firebase Realtime Database. This dashboard updates automatically whenever the surface node sends sensor alerts.</p>
+        </section>
+        <section class="panel">
+          <h2>Connection</h2>
+          <p id="connectionStatus">Waiting for Firebase...</p>
+          <p id="lastUpdated" style="margin-top: 12px; color: var(--muted);">No data loaded yet.</p>
+        </section>
+      </div>
+
+    <section class="metric-grid" id="metricCards">
+      <div class="metric-card">
+        <h3>Active alerts</h3>
+        <p id="activeAlerts">0</p>
+      </div>
+      <div class="metric-card">
+        <h3>Safe nodes</h3>
+        <p id="safeNodes">0</p>
+      </div>
+      <div class="metric-card">
+        <h3>Total nodes</h3>
+        <p id="totalNodes">0</p>
+      </div>
+    </section>
 
     <section class="status-grid" id="mineStatusCards">
       <div class="status-card">
@@ -80,16 +122,28 @@
       </div>
     </section>
 
+    <section class="panel settings-panel">
+      <div>
+        <h2>Alerts & Notifications</h2>
+        <p>Realtime alerts are tracked from the Firebase project. This dashboard reflects the same live alerts and status data as your Android Mine Pulse dashboard.</p>
+      </div>
+      <div>
+        <h2>Dashboard Settings</h2>
+        <p>Configured for your Firebase project and live sensor network. You can add more nodes or alerts in the same database structure to expand visibility.</p>
+      </div>
+    </section>
+
     <section class="panel">
       <h2>Recent Hazard Events</h2>
       <div class="alert-list" id="alertHistory">
         <div class="alert-item"><h4>Waiting for live alert history...</h4></div>
       </div>
     </section>
+  </div>
   </main>
 
   <footer>
-    SubterraGuard &ndash; professional mine safety monitoring with cloud alerts and multi-channel notification.
+    Mine Pulse &ndash; professional mine safety monitoring with cloud alerts and live node status.
   </footer>
 
   <script type="module" src="./app.js"></script>
