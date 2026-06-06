@@ -1,18 +1,24 @@
 name: mine_pulse
 description: "Mine Pulse: Professional mine safety monitoring mobile app."
 publish_to: 'none'
+
 version: 1.0.0+1
 
 environment:
-  sdk: '>=2.18.0 <3.0.0'
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
+
   cupertino_icons: ^1.0.5
+
   firebase_core: ^4.10.0
+  firebase_auth: ^6.5.0
   firebase_database: ^12.4.2
   firebase_messaging: ^16.3.0
+  google_sign_in: ^6.0.0
+
   flutter_local_notifications: ^21.0.0
   flutter_map: ^8.3.0
   latlong2: ^0.9.0
@@ -22,16 +28,18 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
   flutter_lints: ^2.0.0
   flutter_launcher_icons: ^0.13.1
 
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "../favicon.jpeg"
+  image_path: "web/favicon.jpeg"
+
 flutter:
   uses-material-design: true
 
   assets:
-    - assets/app_icon_base.png
+    - assets/favicon.jpeg
     - assets/dashboard_hero.png

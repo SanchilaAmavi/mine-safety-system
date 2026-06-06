@@ -7,13 +7,28 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/foundation.dart';
+import 'firebase_options.dart';
+
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  debugPrint('Background message received: ${message.messageId}');
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   bool firebaseAvailable = true;
 
   try {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    if (!kIsWeb) {
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    }
   } catch (error) {
     firebaseAvailable = false;
     debugPrint('Firebase initialization failed: $error');
@@ -39,22 +54,45 @@ class _MinePulseAppState extends State<MinePulseApp> {
   void initState() {
     super.initState();
     _initializeNotifications();
-    if (widget.firebaseAvailable) {
-      _messaging = FirebaseMessaging.instance;
-      _subscribeToAlerts();
-    }
   }
 
   Future<void> _initializeNotifications() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const settings = InitializationSettings(android: androidSettings);
-    await _notifications.initialize(settings: settings);
+    if (!widget.firebaseAvailable) return;
+
+    _messaging = FirebaseMessaging.instance;
+    await _requestPermission();
+    await _subscribeToAlerts();
+
+    if (!kIsWeb) {
+      const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const settings = InitializationSettings(android: androidSettings);
+      await _notifications.initialize(settings: settings);
+    }
 
     FirebaseMessaging.onMessage.listen((message) {
       final title = message.notification?.title ?? 'Mine Safety Alert';
       final body = message.notification?.body ?? 'A new hazard event was detected.';
-      _showNotification(title, body);
+      if (!kIsWeb) {
+        _showNotification(title, body);
+      }
     });
+  }
+
+  Future<void> _requestPermission() async {
+    if (_messaging == null) return;
+    final settings = await _messaging!.requestPermission(
+      alert: true,
+      announcement: false,
+      badge: true,
+      carPlay: false,
+      criticalAlert: false,
+      provisional: false,
+      sound: true,
+    );
+
+    if (settings.authorizationStatus == AuthorizationStatus.denied) {
+      debugPrint('Firebase messaging permission denied. Notifications may not appear.');
+    }
   }
 
   Future<void> _showNotification(String title, String body) async {
@@ -83,10 +121,52 @@ class _MinePulseAppState extends State<MinePulseApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Mine Pulse',
-      theme: ThemeData.dark().copyWith(
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFF5B700),
-          secondary: Color(0xFF57D27A),
+      theme: ThemeData.light().copyWith(
+        colorScheme: const ColorScheme.light(
+          primary: Color(0xFF0057FF),
+          secondary: Color(0xFFF5B700),
+          surface: Color(0xFFFFFFFF),
+          onPrimary: Colors.white,
+          onSecondary: Colors.black,
+          onSurface: Color(0xFF142A45),
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF3F8FF),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0057FF),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          titleTextStyle: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white),
+          iconTheme: IconThemeData(color: Colors.white),
+        ),
+        cardColor: const Color(0xFFFFFFFF),
+        cardTheme: CardThemeData(
+          elevation: 1,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          margin: const EdgeInsets.symmetric(vertical: 8),
+        ),
+        bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+          backgroundColor: Color(0xFFFFFFFF),
+          selectedItemColor: Color(0xFF0057FF),
+          unselectedItemColor: Color(0xFF6E7A8C),
+          selectedLabelStyle: TextStyle(fontWeight: FontWeight.w600),
+          unselectedLabelStyle: TextStyle(fontWeight: FontWeight.w400),
+          type: BottomNavigationBarType.fixed,
+        ),
+        inputDecorationTheme: const InputDecorationTheme(
+          filled: true,
+          fillColor: Color(0xFFF4F8FF),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(14)),
+            borderSide: BorderSide.none,
+          ),
+          hintStyle: TextStyle(color: Color(0xFF7A8CAD)),
+          labelStyle: TextStyle(color: Color(0xFF142A45)),
+          contentPadding: EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+        ),
+        textTheme: const TextTheme(
+          bodyLarge: TextStyle(color: Color(0xFF142A45)),
+          bodyMedium: TextStyle(color: Color(0xFF3D5481)),
+          titleLarge: TextStyle(color: Color(0xFF142A45), fontWeight: FontWeight.w600),
         ),
       ),
       home: HomeScreen(firebaseAvailable: widget.firebaseAvailable),
@@ -174,6 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _showToast('Unable to open messaging app.');
   }
 
+
   void _showToast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
@@ -189,7 +270,7 @@ class _HomeScreenState extends State<HomeScreen> {
       body: widget.firebaseAvailable ? _buildFirebaseBody() : _buildDemoBody(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openPhoneDialer(_emergencyNumber),
-        backgroundColor: const Color(0xFFD32F2F),
+        backgroundColor: const Color(0xFF0057FF),
         icon: const Icon(Icons.warning),
         label: const Text('EMERGENCY SOS'),
       ),
@@ -197,9 +278,9 @@ class _HomeScreenState extends State<HomeScreen> {
       extendBody: true,
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
-        selectedItemColor: const Color(0xFFF5B700),
-        unselectedItemColor: Colors.white70,
-        backgroundColor: const Color(0xFF08121F),
+        selectedItemColor: const Color(0xFF0057FF),
+        unselectedItemColor: const Color(0xFF6E7A8C),
+        backgroundColor: const Color(0xFFFFFFFF),
         type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Dashboard'),
@@ -353,6 +434,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return SettingsTab(
           onEmergencyCall: onEmergencyCall,
           onEmergencySms: onEmergencySms,
+          userEmail: null,
+          onSignOut: null,
         );
     }
   }
@@ -451,10 +534,16 @@ class DashboardTab extends StatelessWidget {
     final safeMines = mines.where((mine) => !mine.active).length;
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         Container(
-          decoration: BoxDecoration(color: const Color(0xFF112135), borderRadius: BorderRadius.circular(18)),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF7FAFF),
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: const [
+              BoxShadow(color: Color(0x14000000), blurRadius: 20, offset: Offset(0, 10)),
+            ],
+          ),
           padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -465,7 +554,7 @@ class DashboardTab extends StatelessWidget {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(18),
                     child: Image.asset(
-                      'assets/app_icon_base.png',
+                      'assets/favicon.jpeg',
                       width: 72,
                       height: 72,
                       fit: BoxFit.cover,
@@ -476,14 +565,14 @@ class DashboardTab extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Mine Pulse', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+                        const Text('Mine Pulse', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
                         const SizedBox(height: 6),
-                        const Text('Operational mine safety monitoring with live alert visibility.', style: TextStyle(fontSize: 15, color: Color(0xFF8FA6C0))),
+                        const Text('Operational mine safety monitoring with live alert visibility.', style: TextStyle(fontSize: 15, color: Color(0xFF586C8B))),
                         const SizedBox(height: 12),
-                        Text(demoMode ? 'Demo mode: no live Firebase data.' : 'Connected to live monitoring.', style: const TextStyle(fontSize: 14, color: Color(0xFFB0C5E2))),
+                        Text(demoMode ? 'Demo mode: no live Firebase data.' : 'Connected to live monitoring.', style: const TextStyle(fontSize: 14, color: Color(0xFF3D5481))),
                         if (locationStatus != null) ...[
                           const SizedBox(height: 12),
-                          Text(locationStatus!, style: const TextStyle(fontSize: 14, color: Color(0xFFB0C5E2))),
+                          Text(locationStatus!, style: const TextStyle(fontSize: 14, color: Color(0xFF3D5481))),
                         ],
                       ],
                     ),
@@ -516,16 +605,16 @@ class DashboardTab extends StatelessWidget {
         const SizedBox(height: 18),
         if (mines.isEmpty)
           const Card(
-            color: Color(0xFF111A28),
+            color: Color(0xFFFFFFFF),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(16))),
-            child: const Padding(
-              padding: const EdgeInsets.all(16),
+            child: Padding(
+              padding: EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text('No devices connected', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                children: [
+                  Text('No devices connected', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
                   SizedBox(height: 8),
-                  Text('Your phone location is available on the Map tab. Live mine telemetry will appear here once your gateway and underground nodes connect.', style: TextStyle(color: Colors.white70, fontSize: 15)),
+                  Text('Your phone location is available on the Map tab. Live mine telemetry will appear here once your gateway and underground nodes connect.', style: TextStyle(color: Color(0xFF6E7A8C), fontSize: 15)),
                 ],
               ),
             ),
@@ -539,11 +628,11 @@ class DashboardTab extends StatelessWidget {
           ...activeAlerts.take(3).map((alert) => AlertTile(alert: alert)),
         ] else
           Card(
-            color: const Color(0xFF111A28),
+            color: const Color(0xFFFFFFFF),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: const Padding(
               padding: EdgeInsets.all(16),
-              child: Text('No active alerts detected. The mine network is stable or not yet connected.', style: TextStyle(color: Colors.white70, fontSize: 15)),
+              child: Text('No active alerts detected. The mine network is stable or not yet connected.', style: TextStyle(color: Color(0xFF5D6E84), fontSize: 15)),
             ),
           ),
         const SizedBox(height: 22),
@@ -553,11 +642,11 @@ class DashboardTab extends StatelessWidget {
           ...mines.map((mine) => MineCard(status: mine))
         else
           Card(
-            color: const Color(0xFF111A28),
+            color: const Color(0xFFFFFFFF),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: const Padding(
               padding: EdgeInsets.all(16),
-              child: Text('No telemetry records are available until underground nodes connect to the surface gateway.', style: TextStyle(color: Colors.white70, fontSize: 15)),
+              child: Text('No telemetry records are available until underground nodes connect to the surface gateway.', style: TextStyle(color: Color(0xFF5D6E84), fontSize: 15)),
             ),
           ),
       ],
@@ -587,7 +676,7 @@ class MapTab extends StatelessWidget {
         ? LatLng(currentPosition!.latitude, currentPosition!.longitude)
         : mines.isNotEmpty
             ? LatLng(mines.first.latitude, mines.first.longitude)
-            : LatLng(37.4275, -122.1697);
+            : const LatLng(37.4275, -122.1697);
 
     final markers = mines.map((mine) {
       final isAlert = alerts.any((alert) => alert.mineId == mine.id && alert.severity != AlertSeverity.safe);
@@ -646,7 +735,7 @@ class MapTab extends StatelessWidget {
           ),
         ),
         Container(
-          color: const Color(0xFF08121F),
+          color: const Color(0xFFF4F8FF),
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -654,9 +743,9 @@ class MapTab extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Expanded(child: Text('Live map shows your phone and mine node locations with real positioning.', style: TextStyle(color: Colors.white70))),
+                  const Expanded(child: Text('Live map shows your phone and mine node locations with real positioning.', style: TextStyle(color: Color(0xFF142A45)))),
                   IconButton(
-                    icon: const Icon(Icons.my_location, color: Color(0xFFF5B700)),
+                    icon: const Icon(Icons.my_location, color: Color(0xFF0057FF)),
                     tooltip: 'Refresh device location',
                     onPressed: () async => await onRefreshLocation(),
                   ),
@@ -664,10 +753,10 @@ class MapTab extends StatelessWidget {
               ),
               if (locationStatus != null) ...[
                 const SizedBox(height: 8),
-                Text(locationStatus!, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                Text(locationStatus!, style: const TextStyle(color: Color(0xFF3D5481), fontSize: 14)),
               ],
               const SizedBox(height: 8),
-              const Text('Emergency actions are available in the Safety tab.', style: TextStyle(color: Colors.white70)),
+              const Text('Emergency actions are available in the Safety tab.', style: TextStyle(color: Color(0xFF3D5481))),
             ],
           ),
         ),
@@ -689,7 +778,7 @@ class AlertsTab extends StatelessWidget {
     final history = alerts.reversed.toList();
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         const Text('Alert Center', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 10),
@@ -701,7 +790,7 @@ class AlertsTab extends StatelessWidget {
           ),
         const SizedBox(height: 12),
         if (activeAlerts.isEmpty)
-          const Text('All systems stable. No active danger alerts at this time.', style: TextStyle(fontSize: 16, color: Colors.white70)),
+          const Text('All systems stable. No active danger alerts at this time.', style: TextStyle(fontSize: 16, color: Color(0xFF5D6E84))),
         ...activeAlerts.map((alert) => AlertTile(alert: alert)),
         const SizedBox(height: 18),
         ElevatedButton.icon(
@@ -715,7 +804,7 @@ class AlertsTab extends StatelessWidget {
         const Text('Alert History', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 10),
         ...history.take(5).map((alert) => Card(
-              color: const Color(0xFF111A28),
+              color: const Color(0xFFFFFFFF),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               margin: const EdgeInsets.only(bottom: 12),
               child: Padding(
@@ -723,11 +812,11 @@ class AlertsTab extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(alert.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                    Text(alert.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
                     const SizedBox(height: 6),
                     Text('Node ${alert.mineId} · ${alert.severity}', style: const TextStyle(color: Color(0xFF8FA6C0))),
                     const SizedBox(height: 8),
-                    Text(alert.description, style: const TextStyle(color: Colors.white70)),
+                    Text(alert.description, style: const TextStyle(color: Color(0xFF3D5481))),
                   ],
                 ),
               ),
@@ -748,12 +837,12 @@ class AlertsTab extends StatelessWidget {
     ];
     return messages
         .map((message) => Card(
-              color: const Color(0xFF111A28),
+              color: const Color(0xFFFFFFFF),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               margin: const EdgeInsets.only(bottom: 12),
               child: Padding(
                 padding: const EdgeInsets.all(14),
-                child: Text(message, style: const TextStyle(fontSize: 16, color: Colors.white70)),
+                child: Text(message, style: const TextStyle(fontSize: 16, color: Color(0xFF3D5481))),
               ),
             ))
         .toList();
@@ -769,7 +858,7 @@ class NodesTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         const Text('Node Monitoring', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
@@ -801,7 +890,7 @@ class _NodeStatusCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: const Color(0xFF111A28),
+      color: const Color(0xFFFFFFFF),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
@@ -812,27 +901,27 @@ class _NodeStatusCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Node ${node.id.toUpperCase()}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Text('Node ${node.id.toUpperCase()}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
                 Chip(
                   backgroundColor: node.active ? const Color(0xFFFF5C5C) : const Color(0xFF57D27A),
-                  label: Text(node.active ? 'ALERT' : 'SAFE'),
+                  label: Text(node.active ? 'ALERT' : 'SAFE', style: const TextStyle(color: Colors.white)),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            Text('Methane: ${node.mq4} ppm', style: const TextStyle(fontSize: 16)),
+            Text('Methane: ${node.mq4} ppm', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
             const SizedBox(height: 6),
-            Text('Carbon monoxide: ${node.mq7} ppm', style: const TextStyle(fontSize: 16)),
+            Text('Carbon monoxide: ${node.mq7} ppm', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
             const SizedBox(height: 6),
-            Text('Water level: ${node.water}', style: const TextStyle(fontSize: 16)),
+            Text('Water level: ${node.water}', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
             const SizedBox(height: 6),
-            Text('Signal RSSI: ${node.rssi} dBm', style: const TextStyle(fontSize: 16, color: Color(0xFF8FA6C0))),
+            Text('Signal RSSI: ${node.rssi} dBm', style: const TextStyle(fontSize: 16, color: Color(0xFF5D6E84))),
             const SizedBox(height: 6),
             Row(
               children: [
                 Text('Battery: ${node.battery}', style: TextStyle(fontSize: 16, color: batteryColor, fontWeight: FontWeight.w600)),
                 const SizedBox(width: 12),
-                Flexible(child: Text('Position: ${node.latitude.toStringAsFixed(4)}, ${node.longitude.toStringAsFixed(4)}', style: const TextStyle(fontSize: 14, color: Colors.white70))),
+                Flexible(child: Text('Position: ${node.latitude.toStringAsFixed(4)}, ${node.longitude.toStringAsFixed(4)}', style: const TextStyle(fontSize: 14, color: Color(0xFF5D6E84)))),
               ],
             ),
           ],
@@ -859,7 +948,7 @@ class AnalyticsTab extends StatelessWidget {
     final waterAlerts = alerts.where((alert) => alert.title.toLowerCase().contains('water')).length;
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         const Text('Analytics', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
@@ -886,18 +975,18 @@ class AnalyticsTab extends StatelessWidget {
         const Text('Activity Summary', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
         Card(
-          color: const Color(0xFF111A28),
+          color: const Color(0xFFFFFFFF),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Weekly reports estimate network performance and alert patterns using current telemetry.', style: TextStyle(color: Colors.white70)),
+                const Text('Weekly reports estimate network performance and alert patterns using current telemetry.', style: TextStyle(color: Color(0xFF5D6E84))),
                 const SizedBox(height: 14),
-                Text('Tracked nodes: ${mines.length}', style: const TextStyle(fontSize: 16)),
+                Text('Tracked nodes: ${mines.length}', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
                 const SizedBox(height: 6),
-                Text('Total alerts: $total', style: const TextStyle(fontSize: 16)),
+                Text('Total alerts: $total', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
               ],
             ),
           ),
@@ -908,10 +997,12 @@ class AnalyticsTab extends StatelessWidget {
 }
 
 class SettingsTab extends StatefulWidget {
-  const SettingsTab({super.key, required this.onEmergencyCall, required this.onEmergencySms});
+  const SettingsTab({super.key, required this.onEmergencyCall, required this.onEmergencySms, this.userEmail, this.onSignOut});
 
   final VoidCallback onEmergencyCall;
   final VoidCallback onEmergencySms;
+  final String? userEmail;
+  final Future<void> Function()? onSignOut;
 
   @override
   State<SettingsTab> createState() => _SettingsTabState();
@@ -936,7 +1027,7 @@ class _SettingsTabState extends State<SettingsTab> {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         const Text('System Settings', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
@@ -946,13 +1037,21 @@ class _SettingsTabState extends State<SettingsTab> {
             TextField(
               controller: _methaneThresholdController,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Methane threshold (ppm)'),
+              decoration: const InputDecoration(
+                labelText: 'Methane threshold (ppm)',
+                filled: true,
+                fillColor: Color(0xFFF4F8FF),
+              ),
             ),
             const SizedBox(height: 10),
             TextField(
               controller: _coThresholdController,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'CO threshold (ppm)'),
+              decoration: const InputDecoration(
+                labelText: 'CO threshold (ppm)',
+                filled: true,
+                fillColor: Color(0xFFF4F8FF),
+              ),
             ),
           ],
         ),
@@ -963,7 +1062,11 @@ class _SettingsTabState extends State<SettingsTab> {
             TextField(
               controller: _emergencyNumberController,
               keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(labelText: 'Primary SMS number'),
+              decoration: const InputDecoration(
+                labelText: 'Primary SMS number',
+                filled: true,
+                fillColor: Color(0xFFF4F8FF),
+              ),
             ),
             const SizedBox(height: 10),
             Row(
@@ -1010,25 +1113,24 @@ class _SettingsTabState extends State<SettingsTab> {
         ),
         const SizedBox(height: 12),
         _SettingsSection(
-          title: 'User Management',
+          title: 'Account',
           children: [
-            const ListTile(
-              title: Text('Supervisor'),
-              subtitle: Text('supervisor@minepulse.local'),
-              leading: Icon(Icons.person_outline),
+            ListTile(
+              title: const Text('Signed in as'),
+              subtitle: Text(widget.userEmail ?? 'Not signed in'),
+              leading: const Icon(Icons.person_outline),
             ),
-            const ListTile(
-              title: Text('Field operator'),
-              subtitle: Text('operator@minepulse.local'),
-              leading: Icon(Icons.person_outline),
-            ),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.person_add),
-              label: const Text('Add user'),
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User management will be added in the next version.')));
-              },
-            ),
+            if (widget.onSignOut != null)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.logout),
+                label: const Text('Sign Out'),
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  await widget.onSignOut!();
+                  if (!mounted) return;
+                  messenger.showSnackBar(const SnackBar(content: Text('Signed out successfully.')));
+                },
+              ),
           ],
         ),
       ],
@@ -1045,14 +1147,16 @@ class _SettingsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: const Color(0xFF111A28),
+      color: const Color(0xFFFFFFFF),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: 4,
+      margin: const EdgeInsets.symmetric(vertical: 8),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
             const SizedBox(height: 12),
             ...children,
           ],
@@ -1077,14 +1181,14 @@ class _TrendBar extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: const TextStyle(fontSize: 16)),
-            Text(value.toString(), style: const TextStyle(color: Colors.white70)),
+            Text(label, style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
+            Text(value.toString(), style: const TextStyle(color: Color(0xFF5D6E84), fontWeight: FontWeight.w600)),
           ],
         ),
         const SizedBox(height: 6),
         Container(
           height: 12,
-          decoration: BoxDecoration(color: const Color(0xFF0F1D2C), borderRadius: BorderRadius.circular(8)),
+          decoration: BoxDecoration(color: const Color(0xFFE6F0FF), borderRadius: BorderRadius.circular(8)),
           child: FractionallySizedBox(
             alignment: Alignment.centerLeft,
             widthFactor: value > 0 ? (value / (value + 5)).clamp(0.1, 1.0) : 0.05,
@@ -1107,7 +1211,7 @@ class _SignalTrendRow extends StatelessWidget {
     final rssi = int.tryParse(node.rssi.replaceAll(RegExp('[^0-9-]'), '')) ?? -100;
     final signalStrength = ((rssi + 120) / 60).clamp(0.0, 1.0);
     return Card(
-      color: const Color(0xFF111A28),
+      color: const Color(0xFFFFFFFF),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -1115,11 +1219,11 @@ class _SignalTrendRow extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Node ${node.id.toUpperCase()}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Text('Node ${node.id.toUpperCase()}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
             const SizedBox(height: 8),
-            Text('Signal quality: ${node.rssi} dBm', style: const TextStyle(color: Colors.white70)),
+            Text('Signal quality: ${node.rssi} dBm', style: const TextStyle(color: Color(0xFF5D6E84))),
             const SizedBox(height: 8),
-            LinearProgressIndicator(value: signalStrength, color: const Color(0xFF5C9BFF), backgroundColor: const Color(0xFF0F1D2C)),
+            LinearProgressIndicator(value: signalStrength, color: const Color(0xFF5C9BFF), backgroundColor: const Color(0xFFE6F0FF)),
           ],
         ),
       ),
@@ -1136,7 +1240,7 @@ class EmergencyActionsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: const Color(0xFF111A28),
+      color: const Color(0xFFFFFFFF),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
@@ -1144,9 +1248,9 @@ class EmergencyActionsCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Emergency Contact', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Emergency Contact', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
             const SizedBox(height: 10),
-            const Text('Use the emergency call or message actions below to notify surface command and rescue teams immediately.', style: TextStyle(fontSize: 16, color: Colors.white70)),
+            const Text('Use the emergency call or message actions below to notify surface command and rescue teams immediately.', style: TextStyle(fontSize: 16, color: Color(0xFF5D6E84))),
             const SizedBox(height: 18),
             Row(
               children: [
@@ -1190,7 +1294,7 @@ class _SummaryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: Colors.white70)),
+          Text(label, style: const TextStyle(color: Color(0xFF142A45), fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.bold)),
         ],
@@ -1223,10 +1327,15 @@ class AlertTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = alert.severity == AlertSeverity.critical
-        ? const Color(0xFF3A121E)
+        ? const Color(0xFFFFEBEE)
         : alert.severity == AlertSeverity.warning
-            ? const Color(0xFF3D2E10)
-            : const Color(0xFF112135);
+            ? const Color(0xFFFFF4E5)
+            : const Color(0xFFE8F3FF);
+    final iconColor = alert.severity == AlertSeverity.critical
+        ? const Color(0xFFD62828)
+        : alert.severity == AlertSeverity.warning
+            ? const Color(0xFFB66D00)
+            : const Color(0xFF0057FF);
     final icon = alert.severity == AlertSeverity.critical
         ? Icons.dangerous
         : alert.severity == AlertSeverity.warning
@@ -1244,15 +1353,15 @@ class AlertTile extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(icon, color: Colors.white, size: 22),
+                Icon(icon, color: iconColor, size: 22),
                 const SizedBox(width: 10),
-                Expanded(child: Text(alert.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                Expanded(child: Text(alert.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45)))),
               ],
             ),
             const SizedBox(height: 8),
-            Text('Node: ${alert.mineId}', style: const TextStyle(color: Colors.white70)),
+            Text('Node: ${alert.mineId}', style: const TextStyle(color: Color(0xFF5D6E84))),
             const SizedBox(height: 8),
-            Text(alert.description, style: const TextStyle(fontSize: 15, color: Colors.white70)),
+            Text(alert.description, style: const TextStyle(fontSize: 15, color: Color(0xFF142A45))),
           ],
         ),
       ),
@@ -1292,7 +1401,7 @@ class MineCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: const Color(0xFF111A28),
+      color: const Color(0xFFFFFFFF),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
@@ -1303,21 +1412,21 @@ class MineCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Mine ${status.id.toUpperCase()}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Text('Mine ${status.id.toUpperCase()}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
                 Chip(
                   backgroundColor: status.active ? const Color(0xFFFF5C5C) : const Color(0xFF57D27A),
-                  label: Text(status.active ? 'ALERT' : 'SAFE'),
+                  label: Text(status.active ? 'ALERT' : 'SAFE', style: const TextStyle(color: Colors.white)),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            Text('Methane: ${status.mq4} ppm', style: const TextStyle(fontSize: 16)),
+            Text('Methane: ${status.mq4} ppm', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
             const SizedBox(height: 8),
-            Text('Carbon monoxide: ${status.mq7} ppm', style: const TextStyle(fontSize: 16)),
+            Text('Carbon monoxide: ${status.mq7} ppm', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
             const SizedBox(height: 8),
-            Text('Water level: ${status.water}', style: const TextStyle(fontSize: 16)),
+            Text('Water level: ${status.water}', style: const TextStyle(fontSize: 16, color: Color(0xFF142A45))),
             const SizedBox(height: 8),
-            Text('Signal RSSI: ${status.rssi} dBm', style: const TextStyle(color: Color(0xFF8FA6C0))),
+            Text('Signal RSSI: ${status.rssi} dBm', style: const TextStyle(color: Color(0xFF5D6E84))),
             const SizedBox(height: 8),
             Text('Battery: ${status.battery}', style: const TextStyle(fontSize: 16, color: Color(0xFF57D27A))),
           ],

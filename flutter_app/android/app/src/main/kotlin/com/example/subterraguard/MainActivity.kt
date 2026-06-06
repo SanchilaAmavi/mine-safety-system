@@ -1,4 +1,4 @@
-package com.example.subterraguard
+package com.example.Mine_Pulse
 
 import io.flutter.embedding.android.FlutterActivity
 

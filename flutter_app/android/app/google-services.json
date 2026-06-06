@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "124181657638",
+    "firebase_url": "https://mine-pulse-default-rtdb.firebaseio.com",
+    "project_id": "mine-pulse",
+    "storage_bucket": "mine-pulse.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:124181657638:android:d8c4d5a61d37c61d9e8ee7",
+        "android_client_info": {
+          "package_name": "com.example.Mine_Pulse"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDaDrIaz_O6KdOFkzWfLlJGfrZd_VOkg4Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

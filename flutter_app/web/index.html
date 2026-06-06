@@ -19,15 +19,16 @@
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="Mine Pulse: professional mine safety monitoring mobile app.">
+  <meta name="theme-color" content="#0057FF">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Mine Pulse">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" href="favicon.jpeg">
 
   <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="icon" type="image/jpeg" href="favicon.jpeg"/>
 
   <title>Mine Pulse</title>
   <link rel="manifest" href="manifest.json">
@@ -42,5 +43,14 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/firebase-messaging-sw.js').catch(function(error) {
+          console.error('Service Worker registration failed:', error);
+        });
+      });
+    }
+  </script>
 </body>
 </html>
