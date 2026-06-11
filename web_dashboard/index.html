@@ -36,6 +36,7 @@
     .status-card h3 { margin: 0 0 10px; font-size: 1.1rem; color: var(--text); }
     .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; font-size: 0.95rem; font-weight: 600; }
     .badge-danger { background: rgba(214,40,40,0.12); color: var(--danger); }
+    .badge-warning { background: rgba(255, 171, 0, 0.16); color: #bf7100; }
     .badge-success { background: rgba(35,134,54,0.16); color: var(--success); }
     .stat-row { display: grid; gap: 10px; margin-top: 16px; }
     .stat-row div { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.95rem; }
@@ -83,7 +84,7 @@
       <div class="top-panel">
         <section class="panel">
           <h2>Live Application Status</h2>
-          <p>Surface gateway data is streamed through Firebase Realtime Database. This dashboard updates automatically whenever the surface node sends sensor alerts.</p>
+          <p>Surface gateway status and alerts are streamed through Firebase Realtime Database. This matches the device and mobile app data path for consistent mine safety monitoring.</p>
         </section>
         <section class="panel">
           <h2>Connection</h2>
@@ -109,16 +110,8 @@
 
     <section class="status-grid" id="mineStatusCards">
       <div class="status-card">
-        <h3>Mine 1</h3>
-        <div class="stat-row">
-          <div><span>Status</span><span>Loading...</span></div>
-        </div>
-      </div>
-      <div class="status-card">
-        <h3>Mine 2</h3>
-        <div class="stat-row">
-          <div><span>Status</span><span>Loading...</span></div>
-        </div>
+        <h3>Loading sensor data...</h3>
+        <p style="color: var(--muted); margin-top: 12px;">Realtime sensor cards will appear here once Firebase data is loaded.</p>
       </div>
     </section>
 

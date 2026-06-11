@@ -3,22 +3,24 @@ const admin = require('firebase-admin');
 
 admin.initializeApp();
 
-exports.sendAlertNotification = functions.database
-  .ref('/alerts/{mineId}/history/{pushId}')
-  .onCreate(async (snapshot, context) => {
-    const data = snapshot.val();
-    const mineId = context.params.mineId;
+exports.sendAlertNotification = functions.firestore
+  .document('alerts/{alertId}')
+  .onCreate(async (snap, context) => {
+    const alert = snap.data() || {};
 
-    const hazards = [];
-    if (data.flags & 0x04) hazards.push('Water');
-    if (data.flags & 0x01) hazards.push('Methane');
-    if (data.flags & 0x02) hazards.push('Carbon Monoxide');
+    if (alert.resolved === true) {
+      return null;
+    }
 
-    const body = hazards.length > 0 ? `${hazards.join(', ')} hazard detected` : 'Hazard detected';
     const message = {
       notification: {
-        title: `SubterraGuard Alert ${mineId.toUpperCase()}`,
-        body: body,
+        title: getTitle(alert.type),
+        body: alert.message || 'New mine alert received.',
+      },
+      data: {
+        type: String(alert.type || 'general'),
+        location: String(alert.location || 'mine'),
+        alertId: String(context.params.alertId || ''),
       },
       topic: 'mine_alerts',
     };
@@ -32,3 +34,14 @@ exports.sendAlertNotification = functions.database
       return null;
     }
   });
+
+function getTitle(type) {
+  switch (type) {
+    case 'gas':
+      return '⚠️ Gas Alert – Mine Pulse';
+    case 'fire':
+      return '🔥 Fire Alert – Mine Pulse';
+    default:
+      return '🚨 Mine Pulse Alert';
+  }
+}
