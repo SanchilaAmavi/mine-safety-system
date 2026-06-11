@@ -61,6 +61,9 @@ class _MinePulseAppState extends State<MinePulseApp> {
 
     _messaging = FirebaseMessaging.instance;
     await _requestPermission();
+    final token = await _messaging!.getToken();
+    debugPrint('FCM token: $token');
+    await _messaging!.subscribeToTopic('mine_alerts');
     await _subscribeToAlerts();
 
     if (!kIsWeb) {
