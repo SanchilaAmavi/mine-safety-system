@@ -48,12 +48,12 @@ class AlertEvent {
     required this.title,
     required this.description,
     required this.severity,
-    this.hazardType           = 'Hazard',
-    this.exposureTime         = 'Monitor continuously',
-    this.hazardLevel          = 'Moderate',
-    this.location             = 'Mine site',
-    this.workers              = 'Response team',
-    this.recommendedAction    = 'Follow standard emergency procedure',
+    this.hazardType        = 'Hazard',
+    this.exposureTime      = 'Monitor continuously',
+    this.hazardLevel       = 'Moderate',
+    this.location          = 'Mine site',
+    this.workers           = 'Response team',
+    this.recommendedAction = 'Follow standard emergency procedure',
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -71,32 +71,33 @@ class MineStatus {
     required this.mq7,
     required this.water,
     required this.rssi,
-    this.battery   = 'Unknown',
+    this.battery          = 'Unknown',
     required this.active,
-    this.latitude  = 6.775904,
-    this.longitude = 80.32928,
-    this.online    = true,
-    // FIX: store the real server timestamp from Firebase
+    this.latitude         = 6.775904,
+    this.longitude        = 80.32928,
+    this.online           = true,
     this.serverTimestamp,
-    this.hazardCh4  = '',
-    this.hazardCo   = '',
-    this.hazardWater = '',
+    // Each flag is ONLY true when the ESP32 explicitly set that hazard flag.
+    // Raw sensor numbers alone do NOT set these flags, preventing stale
+    // Firebase values from triggering false alerts.
+    this.ch4High          = false,
+    this.coHigh           = false,
+    this.waterHigh        = false,
   });
 
   final String   id, name, water, battery;
-  final String   hazardCh4, hazardCo, hazardWater;
   final int      mq4, mq7, rssi;
   final bool     active, online;
   final double   latitude, longitude;
-  // FIX: real DateTime from server — null if node never connected
   final DateTime? serverTimestamp;
+
+  final bool ch4High;
+  final bool coHigh;
+  final bool waterHigh;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ALERT TIMESTAMP REGISTRY
-// Stores the FIRST time an alert key was seen this session.
-// Once stored, the timestamp never changes — so reopening the app does NOT
-// reset the displayed time (the server timestamp is used when available).
 // ─────────────────────────────────────────────────────────────────────────────
 
 class AlertTimestampRegistry {
@@ -105,9 +106,6 @@ class AlertTimestampRegistry {
 
   final Map<String, DateTime> _firstSeen = {};
 
-  /// If [serverTime] is provided and the key is not yet registered, uses
-  /// [serverTime] as the canonical timestamp (from Firebase).  Otherwise
-  /// falls back to DateTime.now().
   DateTime getOrRegister(String key, {DateTime? serverTime}) {
     return _firstSeen.putIfAbsent(key, () => serverTime ?? DateTime.now());
   }
@@ -118,54 +116,51 @@ class AlertTimestampRegistry {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ALERT HISTORY MANAGER
+//
+// CHANGED:
+//   - Active alerts are NEVER removed. They stay in _active permanently once
+//     triggered. They also get added to history immediately so they persist
+//     in both sections.
+//   - updateCurrentAlerts only ADDS new alerts; it never removes any.
+//   - History is never pruned.
 // ─────────────────────────────────────────────────────────────────────────────
-
-class _ActiveRecord {
-  _ActiveRecord(this.alert, this.firstSeenAt);
-  final AlertEvent alert;
-  final DateTime   firstSeenAt;
-}
 
 class AlertHistoryManager {
   AlertHistoryManager._();
   static final AlertHistoryManager instance = AlertHistoryManager._();
 
-  final Map<String, _ActiveRecord> _active  = {};
-  final List<AlertEvent>           _history = [];
+  // key → alert (never removed once added)
+  final Map<String, AlertEvent> _active  = {};
+  // history — accumulates all alerts, never pruned
+  final List<AlertEvent>        _history = [];
 
   List<AlertEvent> get historicalAlerts => List.unmodifiable(_history);
+  List<AlertEvent> get activeAlerts     => List.unmodifiable(_active.values.toList());
 
+  /// Call every time new alerts arrive from live data.
+  /// Only ADDS new alerts — never removes existing ones from active or history.
   void updateCurrentAlerts(List<AlertEvent> newAlerts) {
-    final relevant = newAlerts.where((a) =>
-        a.severity == AlertSeverity.critical ||
-        a.severity == AlertSeverity.warning).toList();
+    final relevant = newAlerts
+        .where((a) =>
+            a.severity == AlertSeverity.critical ||
+            a.severity == AlertSeverity.warning)
+        .toList();
 
-    final newKeys = relevant.map((a) => '${a.mineId}__${a.title}').toSet();
-
-    // Alerts that disappeared → move to history
-    final disappeared = _active.keys.where((k) => !newKeys.contains(k)).toList();
-    for (final k in disappeared) {
-      final rec = _active.remove(k)!;
-      _addToHistory(rec.alert);
-      AlertTimestampRegistry.instance.release(k);
-    }
-
-    // Register new active alerts
     for (final a in relevant) {
       final k = '${a.mineId}__${a.title}';
+      // Only add if not already tracked — never overwrite (preserves timestamp)
       if (!_active.containsKey(k)) {
-        _active[k] = _ActiveRecord(a, a.timestamp);
+        _active[k] = a;
+        _addToHistory(a);
       }
     }
   }
 
-  List<AlertEvent> get activeAlerts =>
-      _active.values.map((e) => e.alert).toList();
-
   void _addToHistory(AlertEvent a) {
     final k = '${a.mineId}__${a.title}';
     final alreadyIn = _history.any((h) =>
-        '${h.mineId}__${h.title}' == k && h.timestamp == a.timestamp);
+        '${h.mineId}__${h.title}' == k &&
+        h.timestamp.difference(a.timestamp).abs() < const Duration(seconds: 5));
     if (!alreadyIn) _history.insert(0, a);
   }
 }
@@ -177,7 +172,6 @@ class AlertHistoryManager {
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
   const initSettings    = InitializationSettings(android: androidSettings);
   await flutterLocalNotificationsPlugin.initialize(initSettings);
@@ -185,7 +179,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(_mineAlertChannel);
-
   await flutterLocalNotificationsPlugin.show(
     message.hashCode,
     message.notification?.title ?? 'Mine Safety Alert',
@@ -210,11 +203,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   bool firebaseAvailable = true;
   try {
-    await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform);
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     if (!kIsWeb) {
-      FirebaseMessaging.onBackgroundMessage(
-          _firebaseMessagingBackgroundHandler);
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
     }
   } catch (error) {
     firebaseAvailable = false;
@@ -246,19 +237,14 @@ class _MinePulseAppState extends State<MinePulseApp> {
 
   Future<void> _initializeNotifications() async {
     if (!widget.firebaseAvailable) return;
-
     _messaging = FirebaseMessaging.instance;
     await _requestPermission();
-
-    await FirebaseMessaging.instance
-        .setForegroundNotificationPresentationOptions(
+    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
       alert: true, badge: true, sound: true,
     );
-
     if (!kIsWeb) {
-      const androidSettings =
-          AndroidInitializationSettings('@mipmap/ic_launcher');
-      const initSettings = InitializationSettings(android: androidSettings);
+      const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const initSettings    = InitializationSettings(android: androidSettings);
       await flutterLocalNotificationsPlugin.initialize(
         initSettings,
         onDidReceiveNotificationResponse: (details) =>
@@ -269,21 +255,17 @@ class _MinePulseAppState extends State<MinePulseApp> {
               AndroidFlutterLocalNotificationsPlugin>()
           ?.createNotificationChannel(_mineAlertChannel);
     }
-
     try {
       final token = await _messaging!.getToken();
       debugPrint('FCM TOKEN: $token');
     } catch (e) {
       debugPrint('ERROR getting FCM token: $e');
     }
-
     try {
       await _messaging!.subscribeToTopic('mine_alerts');
-      debugPrint('Subscribed to mine_alerts topic');
     } catch (e) {
       debugPrint('ERROR subscribing to topic: $e');
     }
-
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       final title = message.notification?.title ?? 'Mine Safety Alert';
       final body  = message.notification?.body  ?? 'A new hazard event.';
@@ -314,9 +296,7 @@ class _MinePulseAppState extends State<MinePulseApp> {
         title: Text(title),
         content: Text(body),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'))
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('OK'))
         ],
       ),
     );
@@ -324,8 +304,7 @@ class _MinePulseAppState extends State<MinePulseApp> {
 
   Future<void> _requestPermission() async {
     if (_messaging == null) return;
-    final settings = await _messaging!
-        .requestPermission(alert: true, badge: true, sound: true);
+    final settings = await _messaging!.requestPermission(alert: true, badge: true, sound: true);
     debugPrint('Notification permission: ${settings.authorizationStatus}');
   }
 
@@ -349,10 +328,7 @@ class _MinePulseAppState extends State<MinePulseApp> {
           backgroundColor: Color(0xFF0057FF),
           foregroundColor: Colors.white,
           elevation: 0,
-          titleTextStyle: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: Colors.white),
+          titleTextStyle: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white),
           iconTheme: IconThemeData(color: Colors.white),
         ),
         cardColor: const Color(0xFFFFFFFF),
@@ -381,14 +357,12 @@ class _MinePulseAppState extends State<MinePulseApp> {
           ),
           hintStyle:    TextStyle(color: Color(0xFF7A8CAD)),
           labelStyle:   TextStyle(color: Color(0xFF142A45)),
-          contentPadding:
-              EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+          contentPadding: EdgeInsets.symmetric(vertical: 14, horizontal: 16),
         ),
         textTheme: const TextTheme(
           bodyLarge:  TextStyle(color: Color(0xFF142A45)),
           bodyMedium: TextStyle(color: Color(0xFF3D5481)),
-          titleLarge: TextStyle(
-              color: Color(0xFF142A45), fontWeight: FontWeight.w600),
+          titleLarge: TextStyle(color: Color(0xFF142A45), fontWeight: FontWeight.w600),
         ),
       ),
       home: HomeScreen(firebaseAvailable: widget.firebaseAvailable),
@@ -410,22 +384,15 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   static const String _emergencyNumber      = '119';
-  static const String _emergencySmsTemplate =
-      'Emergency at mine site. Please respond immediately.';
+  static const String _emergencySmsTemplate = 'Emergency at mine site. Please respond immediately.';
 
   int _selectedIndex = 0;
 
-  // FIX: Listen to /status directly — the ESP32 writes to /status/mine1,
-  // /status/mine2.  We stream the entire /status node so any child change
-  // (mine1 OR mine2 OR mine3) immediately triggers a rebuild.
   DatabaseReference? _statusRef;
 
   Position? _currentPosition;
   String?   _locationStatus;
 
-  // Static device catalogue — maps nodeKey to display metadata.
-  // nodeKey MUST match exactly what the ESP32 writes under /status/
-  // e.g.  /status/mine1  →  nodeKey: 'mine1'
   static const List<_StaticDevice> _staticDevices = [
     _StaticDevice(id: 'MP-001', nodeKey: 'mine1', name: 'Node MINE 1', lat: 6.775904,  lng: 80.32928),
     _StaticDevice(id: 'MP-002', nodeKey: 'mine2', name: 'Node MINE 2', lat: 6.733712,  lng: 80.277296),
@@ -436,9 +403,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     if (widget.firebaseAvailable) {
-      // FIX: keepSynced ensures the RTDB local cache is always up-to-date
-      // so the first frame after opening the app shows stale cached data
-      // instantly while the live update arrives within milliseconds.
       _statusRef = FirebaseDatabase.instance.ref('status');
       _statusRef!.keepSynced(true);
     }
@@ -457,19 +421,15 @@ class _HomeScreenState extends State<HomeScreen> {
         return null;
       }
       var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
+      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
         if (mounted) setState(() => _locationStatus = 'Location permission denied.');
         return null;
       }
-      final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.best);
+      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
       if (mounted) {
         setState(() => _locationStatus =
-            'Phone located at ${pos.latitude.toStringAsFixed(5)}, '
-            '${pos.longitude.toStringAsFixed(5)}');
+            'Phone located at ${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}');
       }
       return pos;
     } catch (e) {
@@ -485,34 +445,36 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sendEmergencySms(String number, String message) async {
-    final uri = Uri(scheme: 'sms', path: number,
-        queryParameters: {'body': message});
+    final uri = Uri(scheme: 'sms', path: number, queryParameters: {'body': message});
     if (await canLaunchUrl(uri)) { await launchUrl(uri); return; }
     _showToast('Unable to open messaging app.');
   }
 
   void _showToast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  // ── Parse a single /status/<nodeKey> node ───────────────────────────────
+  // ── Parse /status/<nodeKey> ────────────────────────────────────────────────
   //
-  // FIX — timestamp handling:
-  //   The ESP32 writes  "timestamp": (int)millis()  which is uptime ms, NOT
-  //   Unix epoch.  We detect this by checking whether the value is smaller
-  //   than a reasonable Unix epoch floor (year 2020 = 1577836800000 ms).
-  //   If it looks like uptime, we fall back to DateTime.now() so that at
-  //   least the first-seen time is correct.  The CORRECT long-term fix is
-  //   to use Firebase ServerValue.timestamp on the ESP32 side — see the
-  //   companion Arduino fix below.
+  // KEY FIX — hazard flags come ONLY from the ESP32's own hazard_* fields.
+  //
+  // Problem: Previously ch4High was set by `mq4Val >= 100`. But mq4Val is
+  // whatever number is sitting in Firebase — even if it's stale from a
+  // previous test session. So testing CO alone could leave an old mq4=120
+  // in the DB, causing ch4High=true and a false Methane alarm.
+  //
+  // Fix: ch4High / coHigh / waterHigh are ONLY true when the ESP32 explicitly
+  // set hazard_ch4 / hazard_co / hazard_water to a truthy value RIGHT NOW.
+  // The raw mq4/mq7 numbers are still read for display purposes, but they
+  // do NOT drive the alert logic anymore.
+  //
+  // The ESP32 must clear these fields (set to "" / false / 0) when the sensor
+  // returns to safe levels. This is the single source of truth.
   MineStatus _parseNode(_StaticDevice device, Map<dynamic, dynamic> statusMap) {
     final raw = statusMap[device.nodeKey];
 
     if (raw == null) {
-      debugPrint('[RTDB] ${device.id}: key "${device.nodeKey}" not found. '
-          'Available: ${statusMap.keys.toList()}');
       return MineStatus(
         id: device.id, name: device.name,
         mq4: 0, mq7: 0, rssi: 0,
@@ -523,15 +485,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final data = Map<String, dynamic>.from(raw as Map);
-    debugPrint('[RTDB] ${device.id} raw data: $data');
+    debugPrint('[RTDB] ${device.id}: $data');
 
-    // ── Sensor values ────────────────────────────────────────────────────────
-    final mq4Val   = _firstOf(data, ['mq4',  'MQ4',  'ch4',  'methane']);
-    final mq7Val   = _firstOf(data, ['mq7',  'MQ7',  'co',   'carbon_monoxide']);
-    final rssiVal  = _firstOf(data, ['rssi', 'RSSI', 'signal']);
-    final battVal  = _firstOf(data, ['battery', 'Battery', 'batt', 'vbat']);
+    // ── Raw sensor integers (display only — NOT used for alert logic) ────────
+    final mq4Val  = _toInt(_firstOf(data, ['mq4',  'MQ4',  'ch4',  'methane']));
+    final mq7Val  = _toInt(_firstOf(data, ['mq7',  'MQ7',  'co',   'carbon_monoxide']));
+    final rssiVal = _toInt(_firstOf(data, ['rssi', 'RSSI', 'signal']));
+    final battVal = _firstOf(data, ['battery', 'Battery', 'batt', 'vbat']);
 
-    // ── Water level ──────────────────────────────────────────────────────────
+    // ── Water display string (for MineCard UI only) ──────────────────────────
     String waterStr = 'Normal';
     final waterRaw = _firstOf(data, ['water', 'Water', 'waterLevel', 'water_level']);
     if (waterRaw != null) {
@@ -542,53 +504,55 @@ class _HomeScreenState extends State<HomeScreen> {
         waterStr = (s.contains('HIGH') || s == '1' || s == 'TRUE') ? 'HIGH' : 'Normal';
       }
     }
-    final hazardWaterRaw = data['hazard_water']?.toString().toUpperCase().trim() ?? '';
-    if (hazardWaterRaw.contains('HIGH') || hazardWaterRaw == '1' || hazardWaterRaw == 'TRUE') {
-      waterStr = 'HIGH';
-    }
-    if (data['water_ingress'] == true || data['water_ingress'] == 1) waterStr = 'HIGH';
 
-    // ── Hazard flags ─────────────────────────────────────────────────────────
-    final hazardCh4  = (data['hazard_ch4']  ?? '').toString();
-    final hazardCo   = (data['hazard_co']   ?? '').toString();
-    final hazardWater = waterStr == 'HIGH' ? 'WATER LEVEL HIGH' : '';
+    // ── ALERT FLAGS: driven ONLY by ESP32 hazard_* fields ───────────────────
+    //
+    // These are the ONLY fields that control whether an alert fires.
+    // Raw sensor numbers (mq4Val, mq7Val) are NOT used for alert decisions.
+    //
+    // Truthy: non-empty string that isn't "false" or "0"
+    // Falsy:  empty string, "false", "0", null, or boolean false
+    final bool ch4High   = _isTruthy(data['hazard_ch4']);
+    final bool coHigh    = _isTruthy(data['hazard_co']);
+    // waterHigh: ESP32 hazard_water flag OR the computed waterStr from sensor
+    final bool waterHigh = _isTruthy(data['hazard_water']) ||
+                           _isTruthy(data['water_ingress']) ||
+                           waterStr == 'HIGH';
 
-    final bool ch4Alert = hazardCh4.isNotEmpty  && hazardCh4.toLowerCase()  != 'false';
-    final bool coAlert  = hazardCo.isNotEmpty   && hazardCo.toLowerCase()   != 'false';
-    final bool inAlert  = data['inAlert'] == true || data['alert'] == true;
+    // inAlert from Firebase: only used to gate the active flag.
+    // If the ESP32 hasn't set inAlert=true, we treat everything as safe
+    // regardless of what hazard_* flags say (defensive check).
+    final bool inAlert = data['inAlert'] == true || data['alert'] == true;
 
-    // ── FIX: Timestamp — convert server value to real DateTime ───────────────
-    // ESP32 currently writes millis() (uptime). Values < 1_577_836_800_000
-    // (Jan 2020 Unix ms) are treated as uptime and ignored.
-    // When ESP32 is updated to write ServerValue.timestamp, this code
-    // automatically uses the correct value.
+    // active = inAlert AND at least one specific hazard flag is set
+    final bool active = inAlert && (ch4High || coHigh || waterHigh);
+
+    // ── Timestamp ────────────────────────────────────────────────────────────
     DateTime? serverTs;
     final tsRaw = data['timestamp'];
     if (tsRaw != null) {
       final tsInt = tsRaw is int ? tsRaw : int.tryParse(tsRaw.toString()) ?? 0;
-      // Unix epoch in ms for 2020-01-01 = 1_577_836_800_000
       if (tsInt > 1577836800000) {
         serverTs = DateTime.fromMillisecondsSinceEpoch(tsInt);
       }
-      // else: uptime millis — ignore, fall back to registry
     }
 
     return MineStatus(
-      id:        device.id,
-      name:      device.name,
-      mq4:       _toInt(mq4Val),
-      mq7:       _toInt(mq7Val),
-      water:     waterStr,
-      rssi:      _toInt(rssiVal),
-      battery:   battVal?.toString() ?? 'N/A',
-      active:    inAlert || ch4Alert || coAlert || waterStr == 'HIGH',
-      online:    true,
-      latitude:  device.lat,
-      longitude: device.lng,
+      id:              device.id,
+      name:            device.name,
+      mq4:             mq4Val,
+      mq7:             mq7Val,
+      water:           waterStr,
+      rssi:            rssiVal,
+      battery:         battVal?.toString() ?? 'N/A',
+      active:          active,
+      online:          true,
+      latitude:        device.lat,
+      longitude:       device.lng,
       serverTimestamp: serverTs,
-      hazardCh4:   hazardCh4,
-      hazardCo:    hazardCo,
-      hazardWater: hazardWater,
+      ch4High:         ch4High,
+      coHigh:          coHigh,
+      waterHigh:       waterHigh,
     );
   }
 
@@ -606,64 +570,65 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
-  // ── Generate alerts from live sensor status ────────────────────────────────
+  // Returns true when the ESP32 hazard field is a truthy value.
+  // Falsy: null, false, 0, "", "false", "0"
+  bool _isTruthy(dynamic val) {
+    if (val == null) return false;
+    if (val is bool) return val;
+    if (val is int) return val != 0;
+    final s = val.toString().trim().toLowerCase();
+    return s.isNotEmpty && s != 'false' && s != '0';
+  }
+
+  // ── Generate alerts ────────────────────────────────────────────────────────
   //
-  // FIX: Timestamp passed from MineStatus.serverTimestamp so alert cards
-  // always show the actual sensor-event time, not the app-open time.
+  // Each sensor alert fires ONLY when its own specific flag is true:
+  //   ch4High  → Methane alerts
+  //   coHigh   → CO alerts
+  //   waterHigh→ Water alert
   //
-  // Thresholds (match ESP32 firmware defaults):
-  //   Methane critical: mq4 >= 100 ppm
-  //   Methane warning : mq4 >= 50  ppm
-  //   CO critical     : mq7 >= 150 ppm   (was 200 — lowered to match real sensor)
-  //   CO warning      : mq7 >= 75  ppm
+  // Because ch4High/coHigh/waterHigh are now driven ONLY by ESP32 hazard_*
+  // fields (not raw numbers), stale Firebase values cannot cause false alerts.
   List<AlertEvent> _generateAlerts(List<MineStatus> mines) {
-    final alerts  = <AlertEvent>[];
+    final alerts   = <AlertEvent>[];
     final registry = AlertTimestampRegistry.instance;
 
     for (final mine in mines) {
-      // Skip nodes that truly have no data (never connected)
-      final hasNoData = mine.mq4 == 0 &&
-          mine.mq7 == 0 &&
-          mine.water == 'Normal' &&
-          !mine.active &&
-          !mine.online;
-      if (hasNoData) continue;
+      if (!mine.online) continue;
 
-      final mq4  = mine.mq4.toDouble();
-      final mq7  = mine.mq7.toDouble();
-      final rssi = mine.rssi;
-      // FIX: use server timestamp when available, else first-seen time
+      // If inAlert is false, no alerts for this node
+      if (!mine.active) continue;
+
       final sTs = mine.serverTimestamp;
 
-      // ── Methane ──────────────────────────────────────────────────────────
-      if (mine.active && mq4 >= 100) {
-        final key = '${mine.id}__Methane Alarm';
-        final ts  = registry.getOrRegister(key, serverTime: sTs);
-        alerts.add(AlertEvent(
-          mineId:            mine.id,
-          title:             'Methane Alarm',
-          description:       'Methane critically high at ${mine.name} (${mine.mq4} ppm). '
-                             'Immediate evacuation required.',
-          severity:          AlertSeverity.critical,
-          hazardType:        'Methane gas',
-          exposureTime:      '0–5 min before unsafe exposure',
-          hazardLevel:       'Critical',
-          location:          '${mine.name} – underground drift',
-          workers:           'Shift team + rescue standby',
-          recommendedAction: 'Evacuate, ventilate, verify gas extraction systems.',
-          timestamp:         ts,
-        ));
-      } else {
-        registry.release('${mine.id}__Methane Alarm');
-
-        if (mine.active && mq4 >= 50) {
+      // ── CH4 / Methane ──────────────────────────────────────────────────────
+      // Only fires when hazard_ch4 is truthy on the ESP32
+      if (mine.ch4High) {
+        if (mine.mq4 >= 100) {
+          final key = '${mine.id}__Methane Alarm';
+          final ts  = registry.getOrRegister(key, serverTime: sTs);
+          alerts.add(AlertEvent(
+            mineId:            mine.id,
+            title:             'Methane Alarm',
+            description:       'Methane critically high at ${mine.name} (${mine.mq4} ppm). '
+                               'Immediate evacuation required.',
+            severity:          AlertSeverity.critical,
+            hazardType:        'Methane gas',
+            exposureTime:      '0–5 min before unsafe exposure',
+            hazardLevel:       'Critical',
+            location:          '${mine.name} – underground drift',
+            workers:           'Shift team + rescue standby',
+            recommendedAction: 'Evacuate, ventilate, verify gas extraction systems.',
+            timestamp:         ts,
+          ));
+        } else {
           final key = '${mine.id}__Methane Elevated';
           final ts  = registry.getOrRegister(key, serverTime: sTs);
           alerts.add(AlertEvent(
             mineId:            mine.id,
             title:             'Methane Elevated',
             description:       'Methane rising at ${mine.name} (${mine.mq4} ppm). '
-                               'Monitor closely and prepare to act.',
+                               'Monitor closely.',
             severity:          AlertSeverity.warning,
             hazardType:        'Methane gas',
             exposureTime:      '5–15 min for monitoring and response',
@@ -673,33 +638,30 @@ class _HomeScreenState extends State<HomeScreen> {
             recommendedAction: 'Increase monitoring and prepare ventilation response.',
             timestamp:         ts,
           ));
-        } else {
-          registry.release('${mine.id}__Methane Elevated');
         }
       }
 
-      // ── CO ───────────────────────────────────────────────────────────────
-      if (mine.active && mq7 >= 150) {
-        final key = '${mine.id}__Carbon Monoxide Alert';
-        final ts  = registry.getOrRegister(key, serverTime: sTs);
-        alerts.add(AlertEvent(
-          mineId:            mine.id,
-          title:             'Carbon Monoxide Alert',
-          description:       'CO critically high at ${mine.name} (${mine.mq7} ppm). '
-                             'Respiratory protection required immediately.',
-          severity:          AlertSeverity.critical,
-          hazardType:        'Carbon monoxide',
-          exposureTime:      'Under 10 min for high exposure',
-          hazardLevel:       'Critical',
-          location:          '${mine.name} – working face',
-          workers:           'All miners in zone',
-          recommendedAction: 'Stop work, activate rescue, check breathing systems.',
-          timestamp:         ts,
-        ));
-      } else {
-        registry.release('${mine.id}__Carbon Monoxide Alert');
-
-        if (mine.active && mq7 >= 75) {
+      // ── CO ─────────────────────────────────────────────────────────────────
+      // Only fires when hazard_co is truthy on the ESP32
+      if (mine.coHigh) {
+        if (mine.mq7 >= 150) {
+          final key = '${mine.id}__Carbon Monoxide Alert';
+          final ts  = registry.getOrRegister(key, serverTime: sTs);
+          alerts.add(AlertEvent(
+            mineId:            mine.id,
+            title:             'Carbon Monoxide Alert',
+            description:       'CO critically high at ${mine.name} (${mine.mq7} ppm). '
+                               'Respiratory protection required immediately.',
+            severity:          AlertSeverity.critical,
+            hazardType:        'Carbon monoxide',
+            exposureTime:      'Under 10 min for high exposure',
+            hazardLevel:       'Critical',
+            location:          '${mine.name} – working face',
+            workers:           'All miners in zone',
+            recommendedAction: 'Stop work, activate rescue, check breathing systems.',
+            timestamp:         ts,
+          ));
+        } else {
           final key = '${mine.id}__CO Elevated';
           final ts  = registry.getOrRegister(key, serverTime: sTs);
           alerts.add(AlertEvent(
@@ -716,13 +678,12 @@ class _HomeScreenState extends State<HomeScreen> {
             recommendedAction: 'Increase ventilation, monitor breathing.',
             timestamp:         ts,
           ));
-        } else {
-          registry.release('${mine.id}__CO Elevated');
         }
       }
 
-      // ── Water ─────────────────────────────────────────────────────────────
-      if (mine.active && mine.water.toUpperCase().contains('HIGH')) {
+      // ── Water ──────────────────────────────────────────────────────────────
+      // Only fires when hazard_water is truthy OR water sensor reads HIGH
+      if (mine.waterHigh) {
         final key = '${mine.id}__Water Ingress Detected';
         final ts  = registry.getOrRegister(key, serverTime: sTs);
         alerts.add(AlertEvent(
@@ -739,12 +700,10 @@ class _HomeScreenState extends State<HomeScreen> {
           recommendedAction: 'Inspect pumps, isolate section, reroute personnel.',
           timestamp:         ts,
         ));
-      } else {
-        registry.release('${mine.id}__Water Ingress Detected');
       }
 
-      // ── Signal quality ────────────────────────────────────────────────────
-      if (rssi != 0 && rssi <= -80) {
+      // ── Signal quality ─────────────────────────────────────────────────────
+      if (mine.rssi != 0 && mine.rssi <= -80) {
         final key = '${mine.id}__Poor Signal Quality';
         final ts  = registry.getOrRegister(key, serverTime: sTs);
         alerts.add(AlertEvent(
@@ -761,11 +720,10 @@ class _HomeScreenState extends State<HomeScreen> {
           recommendedAction: 'Inspect antenna alignment and gateway connectivity.',
           timestamp:         ts,
         ));
-      } else {
-        registry.release('${mine.id}__Poor Signal Quality');
       }
     }
 
+    // Show "all stable" only if no active hazard alerts exist at all
     if (alerts.where((a) =>
         a.severity == AlertSeverity.critical ||
         a.severity == AlertSeverity.warning).isEmpty) {
@@ -777,6 +735,7 @@ class _HomeScreenState extends State<HomeScreen> {
         timestamp:   DateTime.now(),
       ));
     }
+
     return alerts;
   }
 
@@ -785,9 +744,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Mine Pulse'), centerTitle: true),
-      body: widget.firebaseAvailable
-          ? _buildFirebaseBody()
-          : _buildDemoBody(),
+      body: widget.firebaseAvailable ? _buildFirebaseBody() : _buildDemoBody(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openPhoneDialer(_emergencyNumber),
         backgroundColor: const Color(0xFFD62828),
@@ -815,14 +772,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // FIX: Stream /status only — no Firestore dependency.
-  // The ESP32 writes ALERT data directly to /status/mine1 with inAlert=true,
-  // so we only need one stream.  Firestore is no longer used.
   Widget _buildFirebaseBody() {
     if (_statusRef == null) {
-      return _buildTabContent([], [],
-        dataLabel: 'Mine Pulse is not connected to telemetry.',
-      );
+      return _buildTabContent([], [], dataLabel: 'Mine Pulse is not connected to telemetry.');
     }
 
     return StreamBuilder<DatabaseEvent>(
@@ -833,19 +785,14 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                'RTDB Error: ${snap.error}\n\n'
-                'Check Firebase rules and database URL.',
+                'RTDB Error: ${snap.error}\n\nCheck Firebase rules and database URL.',
                 textAlign: TextAlign.center,
               ),
             ),
           );
         }
 
-        // FIX: Show cached data immediately while waiting for live update.
-        // ConnectionState.waiting only appears on first connect; after that
-        // the stream always has data from the local RTDB cache.
-        if (snap.connectionState == ConnectionState.waiting &&
-            !snap.hasData) {
+        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
           return const Center(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               CircularProgressIndicator(),
@@ -859,31 +806,21 @@ class _HomeScreenState extends State<HomeScreen> {
         if (snap.hasData && snap.data?.snapshot.value != null) {
           final val = snap.data!.snapshot.value;
           if (val is Map) statusMap = val;
-          debugPrint('[RTDB] status keys: ${statusMap.keys.toList()}');
-        } else {
-          debugPrint('[RTDB] status snapshot is null or empty');
         }
 
-        final mines = _staticDevices
-            .map((d) => _parseNode(d, statusMap))
-            .toList();
-
+        final mines  = _staticDevices.map((d) => _parseNode(d, statusMap)).toList();
         final alerts = _generateAlerts(mines);
         AlertHistoryManager.instance.updateCurrentAlerts(alerts);
 
-        return _buildTabContent(
-          mines, alerts,
-          dataLabel: 'Live Security Overview',
-        );
+        return _buildTabContent(mines, alerts, dataLabel: 'Live Security Overview');
       },
     );
   }
 
   Widget _buildDemoBody() {
     return _buildTabContent([], [],
-      dataLabel: 'Mine Pulse is running without a telemetry connection.',
-      demoMode: true,
-    );
+        dataLabel: 'Mine Pulse is running without a telemetry connection.',
+        demoMode: true);
   }
 
   Widget _buildTabContent(
@@ -895,10 +832,8 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (_selectedIndex) {
       case 0:
         return DashboardTab(
-          mines: mines, alerts: alerts, dataLabel: dataLabel,
-          demoMode: demoMode,
-          currentPosition: _currentPosition,
-          locationStatus:  _locationStatus,
+          mines: mines, alerts: alerts, dataLabel: dataLabel, demoMode: demoMode,
+          currentPosition: _currentPosition, locationStatus: _locationStatus,
           onEmergencyCall: () => _openPhoneDialer(_emergencyNumber),
           onEmergencySms:  () => _sendEmergencySms(_emergencyNumber, _emergencySmsTemplate),
         );
@@ -909,8 +844,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case 3:
         return MapTab(
           mines: mines, alerts: alerts,
-          currentPosition: _currentPosition,
-          locationStatus:  _locationStatus,
+          currentPosition: _currentPosition, locationStatus: _locationStatus,
           onRefreshLocation: _loadCurrentLocation,
         );
       default:
@@ -929,11 +863,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _StaticDevice {
   const _StaticDevice({
-    required this.id,
-    required this.nodeKey,
-    required this.name,
-    required this.lat,
-    required this.lng,
+    required this.id, required this.nodeKey, required this.name,
+    required this.lat, required this.lng,
   });
   final String id, nodeKey, name;
   final double lat, lng;
@@ -944,8 +875,7 @@ class _StaticDevice {
 // ─────────────────────────────────────────────────────────────────────────────
 
 String _formatTimestamp(DateTime dt) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun',
-                  'Jul','Aug','Sep','Oct','Nov','Dec'];
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   final hour = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
   final ampm = dt.hour >= 12 ? 'PM' : 'AM';
   final min  = dt.minute.toString().padLeft(2, '0');
@@ -965,8 +895,7 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(children: [
-      Text(title,
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+      Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
       if (count != null) ...[
         const SizedBox(width: 8),
         Container(
@@ -976,8 +905,7 @@ class _SectionHeader extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
           ),
           child: Text('$count',
-              style: const TextStyle(
-                  color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
         ),
       ],
     ]);
@@ -995,16 +923,14 @@ class _EmptyStateCard extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Text(message,
-            style: const TextStyle(color: Color(0xFF5D6E84), fontSize: 15)),
+        child: Text(message, style: const TextStyle(color: Color(0xFF5D6E84), fontSize: 15)),
       ),
     );
   }
 }
 
 class EmergencyActionsCard extends StatelessWidget {
-  const EmergencyActionsCard(
-      {super.key, required this.onCall, required this.onSms});
+  const EmergencyActionsCard({super.key, required this.onCall, required this.onSms});
   final VoidCallback onCall, onSms;
 
   @override
@@ -1017,25 +943,15 @@ class EmergencyActionsCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Emergency Contact',
-              style: TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
           const SizedBox(height: 10),
-          const Text(
-              'Contact surface command and rescue teams immediately in case of emergency.',
+          const Text('Contact surface command and rescue teams immediately in case of emergency.',
               style: TextStyle(fontSize: 15, color: Color(0xFF5D6E84))),
           const SizedBox(height: 16),
           Row(children: [
-            Expanded(
-                child: ElevatedButton.icon(
-                    icon: const Icon(Icons.call),
-                    label: const Text('Call'),
-                    onPressed: onCall)),
+            Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.call),    label: const Text('Call'),    onPressed: onCall)),
             const SizedBox(width: 12),
-            Expanded(
-                child: ElevatedButton.icon(
-                    icon: const Icon(Icons.message),
-                    label: const Text('Message'),
-                    onPressed: onSms)),
+            Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.message), label: const Text('Message'), onPressed: onSms)),
           ]),
         ]),
       ),
@@ -1044,28 +960,20 @@ class EmergencyActionsCard extends StatelessWidget {
 }
 
 class _SummaryCard extends StatelessWidget {
-  const _SummaryCard(
-      {required this.label, required this.value, required this.color});
+  const _SummaryCard({required this.label, required this.value, required this.color});
   final String label, value;
   final Color  color;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin:  const EdgeInsets.only(right: 8),
+      margin: const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color:        color.withAlpha(40),
-        borderRadius: BorderRadius.circular(16),
-      ),
+      decoration: BoxDecoration(color: color.withAlpha(40), borderRadius: BorderRadius.circular(16)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label,
-            style: const TextStyle(
-                color: Color(0xFF142A45), fontWeight: FontWeight.w600, fontSize: 12)),
+        Text(label, style: const TextStyle(color: Color(0xFF142A45), fontWeight: FontWeight.w600, fontSize: 12)),
         const SizedBox(height: 8),
-        Text(value,
-            style: TextStyle(
-                color: color, fontSize: 20, fontWeight: FontWeight.bold)),
+        Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.bold)),
       ]),
     );
   }
@@ -1097,20 +1005,14 @@ class AlertTile extends StatelessWidget {
               _detailRow('Location',    alert.location),
               _detailRow('Workers',     alert.workers),
               const SizedBox(height: 8),
-              Text(alert.description,
-                  style: const TextStyle(color: Color(0xFF142A45))),
+              Text(alert.description, style: const TextStyle(color: Color(0xFF142A45))),
               const SizedBox(height: 8),
               Text('Recommended: ${alert.recommendedAction}',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600, color: Color(0xFF0057FF))),
+                  style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF0057FF))),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'))
-        ],
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
       ),
     );
   }
@@ -1122,13 +1024,11 @@ class AlertTile extends StatelessWidget {
         : alert.severity == AlertSeverity.warning
             ? const Color(0xFFFFF4E5)
             : const Color(0xFFE8F3FF);
-
     final iconColor = alert.severity == AlertSeverity.critical
         ? const Color(0xFFD62828)
         : alert.severity == AlertSeverity.warning
             ? const Color(0xFFB66D00)
             : const Color(0xFF0057FF);
-
     final icon = alert.severity == AlertSeverity.critical
         ? Icons.dangerous
         : alert.severity == AlertSeverity.warning
@@ -1148,21 +1048,16 @@ class AlertTile extends StatelessWidget {
             Row(children: [
               Icon(icon, color: iconColor, size: 22),
               const SizedBox(width: 10),
-              Expanded(
-                  child: Text(alert.title,
-                      style: const TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.bold,
-                          color: Color(0xFF142A45)))),
+              Expanded(child: Text(alert.title,
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF142A45)))),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color:        iconColor.withAlpha(30),
-                  borderRadius: BorderRadius.circular(10),
-                  border:       Border.all(color: iconColor.withAlpha(120)),
+                  color: iconColor.withAlpha(30), borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: iconColor.withAlpha(120)),
                 ),
                 child: Text(alert.severity,
-                    style: TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.bold, color: iconColor)),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: iconColor)),
               ),
               const SizedBox(width: 4),
               const Icon(Icons.chevron_right, color: Color(0xFF5D6E84)),
@@ -1174,8 +1069,7 @@ class AlertTile extends StatelessWidget {
             Text(_formatTimestamp(alert.timestamp),
                 style: const TextStyle(fontSize: 12, color: Color(0xFF9BAEC8))),
             const SizedBox(height: 8),
-            Text(alert.description,
-                style: const TextStyle(fontSize: 15, color: Color(0xFF142A45))),
+            Text(alert.description, style: const TextStyle(fontSize: 15, color: Color(0xFF142A45))),
           ]),
         ),
       ),
@@ -1186,12 +1080,8 @@ class AlertTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('$label: ',
-            style: const TextStyle(
-                fontWeight: FontWeight.w700, color: Color(0xFF5D6E84))),
-        Expanded(
-            child: Text(value,
-                style: const TextStyle(color: Color(0xFF142A45)))),
+        Text('$label: ', style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF5D6E84))),
+        Expanded(child: Text(value, style: const TextStyle(color: Color(0xFF142A45)))),
       ]),
     );
   }
@@ -1207,9 +1097,7 @@ class MineCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final onlineBadgeColor = status.online
-        ? const Color(0xFF57D27A)
-        : const Color(0xFF9AA9BE);
+    final onlineBadgeColor = status.online ? const Color(0xFF57D27A) : const Color(0xFF9AA9BE);
     final onlineBadgeLabel = status.online ? 'ONLINE' : 'OFFLINE';
 
     return Card(
@@ -1219,56 +1107,42 @@ class MineCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(status.name,
-                      style: const TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.bold,
-                          color: Color(0xFF142A45))),
-                  Text(status.id,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF8FA6C0))),
-                ]),
-              ),
-              Row(children: [
-                if (status.active)
-                  Container(
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFEBEB),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text('ALERT',
-                        style: TextStyle(
-                            color: Color(0xFFD62828),
-                            fontSize: 11, fontWeight: FontWeight.bold)),
-                  ),
-                Chip(
-                  backgroundColor: onlineBadgeColor,
-                  label: Text(onlineBadgeLabel,
-                      style: const TextStyle(color: Colors.white, fontSize: 11)),
-                  padding: EdgeInsets.zero,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(status.name,
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
+                Text(status.id, style: const TextStyle(fontSize: 12, color: Color(0xFF8FA6C0))),
               ]),
-            ],
-          ),
+            ),
+            Row(children: [
+              if (status.active)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: const Color(0xFFFFEBEB), borderRadius: BorderRadius.circular(8)),
+                  child: const Text('ALERT',
+                      style: TextStyle(color: Color(0xFFD62828), fontSize: 11, fontWeight: FontWeight.bold)),
+                ),
+              Chip(
+                backgroundColor: onlineBadgeColor,
+                label: Text(onlineBadgeLabel, style: const TextStyle(color: Colors.white, fontSize: 11)),
+                padding: EdgeInsets.zero,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ]),
+          ]),
           const SizedBox(height: 12),
           if (status.online) ...[
-            _SensorRow(label: 'Methane (MQ-4)', value: '${status.mq4} ppm',  color: const Color(0xFFFF7043)),
-            _SensorRow(label: 'CO (MQ-7)',      value: '${status.mq7} ppm',  color: const Color(0xFF42A5F5)),
-            _SensorRow(label: 'Water level',    value: status.water,          color: const Color(0xFF45B7D1)),
+            _SensorRow(label: 'Methane (MQ-4)', value: '${status.mq4} ppm',  color: status.ch4High   ? const Color(0xFFD62828) : const Color(0xFF57D27A)),
+            _SensorRow(label: 'CO (MQ-7)',      value: '${status.mq7} ppm',  color: status.coHigh    ? const Color(0xFFD62828) : const Color(0xFF57D27A)),
+            _SensorRow(label: 'Water level',    value: status.water,          color: status.waterHigh ? const Color(0xFFD62828) : const Color(0xFF57D27A)),
             _SensorRow(label: 'Signal RSSI',    value: '${status.rssi} dBm', color: const Color(0xFF2E7DFF)),
             _SensorRow(label: 'Battery',        value: status.battery,        color: const Color(0xFF57D27A)),
             if (status.serverTimestamp != null) ...[
               const SizedBox(height: 6),
-              Text(
-                'Last update: ${_formatTimestamp(status.serverTimestamp!)}',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9BAEC8)),
-              ),
+              Text('Last update: ${_formatTimestamp(status.serverTimestamp!)}',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF9BAEC8))),
             ],
           ] else
             const Text('Device offline — no live telemetry available.',
@@ -1288,22 +1162,14 @@ class _SensorRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(children: [
-            Container(
-                width: 8, height: 8,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-            const SizedBox(width: 8),
-            Text(label,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF5D6E84))),
-          ]),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF142A45))),
-        ],
-      ),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Row(children: [
+          Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(fontSize: 14, color: Color(0xFF5D6E84))),
+        ]),
+        Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF142A45))),
+      ]),
     );
   }
 }
@@ -1314,17 +1180,11 @@ class _SensorRow extends StatelessWidget {
 
 class DashboardTab extends StatelessWidget {
   const DashboardTab({
-    super.key,
-    required this.mines,
-    required this.alerts,
-    required this.dataLabel,
-    required this.demoMode,
-    this.currentPosition,
-    this.locationStatus,
-    required this.onEmergencyCall,
-    required this.onEmergencySms,
+    super.key, required this.mines, required this.alerts,
+    required this.dataLabel, required this.demoMode,
+    this.currentPosition, this.locationStatus,
+    required this.onEmergencyCall, required this.onEmergencySms,
   });
-
   final List<MineStatus> mines;
   final List<AlertEvent> alerts;
   final String dataLabel;
@@ -1336,60 +1196,46 @@ class DashboardTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final activeAlerts = AlertHistoryManager.instance.activeAlerts
-        .where((a) =>
-            a.severity == AlertSeverity.critical ||
-            a.severity == AlertSeverity.warning)
+        .where((a) => a.severity == AlertSeverity.critical || a.severity == AlertSeverity.warning)
         .toList();
     final hasActive = activeAlerts.isNotEmpty;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
-        // ── Header card ──────────────────────────────────────────────────────
         Container(
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [Color(0xFFFFFFFF), Color(0xFFF4F8FF)],
-              begin: Alignment.topLeft,
-              end:   Alignment.bottomRight,
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: const Color(0xFFE2EAF7)),
-            boxShadow: const [
-              BoxShadow(color: Color(0x14000000), blurRadius: 24, offset: Offset(0, 12))
-            ],
+            boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 24, offset: Offset(0, 12))],
           ),
           padding: const EdgeInsets.all(18),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(18),
-                child: Image.asset('assets/favicon.jpeg',
-                    width: 72, height: 72, fit: BoxFit.cover),
+                child: Image.asset('assets/favicon.jpeg', width: 72, height: 72, fit: BoxFit.cover),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('Mine Pulse',
-                      style: TextStyle(
-                          fontSize: 26, fontWeight: FontWeight.w800,
-                          color: Color(0xFF142A45))),
+                      style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: Color(0xFF142A45))),
                   const SizedBox(height: 8),
-                  Text(
-                      demoMode
-                          ? 'Demo mode — no live data.'
-                          : 'Connected to live monitoring.',
+                  Text(demoMode ? 'Demo mode — no live data.' : 'Connected to live monitoring.',
                       style: const TextStyle(fontSize: 14, color: Color(0xFF3D5481))),
                   if (locationStatus != null) ...[
                     const SizedBox(height: 6),
-                    Text(locationStatus!,
-                        style: const TextStyle(fontSize: 13, color: Color(0xFF3D5481))),
+                    Text(locationStatus!, style: const TextStyle(fontSize: 13, color: Color(0xFF3D5481))),
                   ],
                 ]),
               ),
             ]),
             const SizedBox(height: 16),
-            // Alert status banner
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -1397,61 +1243,46 @@ class DashboardTab extends StatelessWidget {
                 color: hasActive ? const Color(0xFFFFEBEB) : const Color(0xFFE8F8EE),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                  color: hasActive ? const Color(0xFFFF5C5C) : const Color(0xFF57D27A),
-                  width: 1.2,
-                ),
+                  color: hasActive ? const Color(0xFFFF5C5C) : const Color(0xFF57D27A), width: 1.2),
               ),
               child: Row(children: [
                 Icon(
                   hasActive ? Icons.warning_amber_rounded : Icons.check_circle_outline,
-                  color: hasActive ? const Color(0xFFD62828) : const Color(0xFF2E9E57),
-                  size: 30,
+                  color: hasActive ? const Color(0xFFD62828) : const Color(0xFF2E9E57), size: 30,
                 ),
                 const SizedBox(width: 12),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(
-                      hasActive
-                          ? '${activeAlerts.length} Active Alert'
-                              '${activeAlerts.length == 1 ? '' : 's'}'
-                          : 'No Active Alerts',
-                      style: TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold,
-                        color: hasActive
-                            ? const Color(0xFFD62828)
-                            : const Color(0xFF2E9E57),
-                      ),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(
+                    hasActive
+                        ? '${activeAlerts.length} Active Alert${activeAlerts.length == 1 ? '' : 's'}'
+                        : 'No Active Alerts',
+                    style: TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.bold,
+                      color: hasActive ? const Color(0xFFD62828) : const Color(0xFF2E9E57),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      hasActive
-                          ? 'Immediate attention required on the mine network.'
-                          : 'All monitored nodes are operating safely.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: hasActive
-                            ? const Color(0xFF7A1C1C)
-                            : const Color(0xFF1A6B3A),
-                      ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    hasActive
+                        ? 'Immediate attention required on the mine network.'
+                        : 'All monitored nodes are operating safely.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: hasActive ? const Color(0xFF7A1C1C) : const Color(0xFF1A6B3A),
                     ),
-                  ]),
-                ),
+                  ),
+                ])),
               ]),
             ),
           ]),
         ),
         const SizedBox(height: 22),
-        _SectionHeader(
-          title:      'Active Alerts',
-          count:      activeAlerts.isNotEmpty ? activeAlerts.length : null,
-          countColor: const Color(0xFFD62828),
-        ),
+        _SectionHeader(title: 'Active Alerts', count: activeAlerts.isNotEmpty ? activeAlerts.length : null, countColor: const Color(0xFFD62828)),
         const SizedBox(height: 10),
         if (activeAlerts.isNotEmpty)
           ...activeAlerts.map((a) => AlertTile(alert: a))
         else
-          const _EmptyStateCard(
-              message: 'No active alerts detected. The mine network is stable.'),
+          const _EmptyStateCard(message: 'No active alerts detected. The mine network is stable.'),
         const SizedBox(height: 22),
         EmergencyActionsCard(onCall: onEmergencyCall, onSms: onEmergencySms),
         const SizedBox(height: 22),
@@ -1460,8 +1291,7 @@ class DashboardTab extends StatelessWidget {
         if (mines.isNotEmpty)
           ...mines.map((m) => MineCard(status: m))
         else
-          const _EmptyStateCard(
-              message: 'No telemetry until underground nodes connect.'),
+          const _EmptyStateCard(message: 'No telemetry until underground nodes connect.'),
       ],
     );
   }
@@ -1472,12 +1302,7 @@ class DashboardTab extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class AlertsTab extends StatelessWidget {
-  const AlertsTab({
-    super.key,
-    required this.alerts,
-    required this.mines,
-    required this.demoMode,
-  });
+  const AlertsTab({super.key, required this.alerts, required this.mines, required this.demoMode});
   final List<AlertEvent> alerts;
   final List<MineStatus> mines;
   final bool demoMode;
@@ -1485,26 +1310,23 @@ class AlertsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final activeAlerts = AlertHistoryManager.instance.activeAlerts
-        .where((a) =>
-            a.severity == AlertSeverity.critical ||
-            a.severity == AlertSeverity.warning)
+        .where((a) => a.severity == AlertSeverity.critical || a.severity == AlertSeverity.warning)
         .toList();
     final history = AlertHistoryManager.instance.historicalAlerts;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
-        const Text('Alert Center',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const Text('Alert Center', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
         const Text(
-          'Active alerts clear automatically when sensors return to safe levels.',
+          'All alerts are kept permanently once triggered.',
           style: TextStyle(fontSize: 12, color: Color(0xFF9BAEC8)),
         ),
         const SizedBox(height: 16),
         _SectionHeader(
-          title:      'Active Alerts',
-          count:      activeAlerts.isNotEmpty ? activeAlerts.length : null,
+          title: 'Active Alerts',
+          count: activeAlerts.isNotEmpty ? activeAlerts.length : null,
           countColor: const Color(0xFFD62828),
         ),
         const SizedBox(height: 10),
@@ -1518,25 +1340,23 @@ class AlertsTab extends StatelessWidget {
             ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('All active alerts acknowledged.')));
           },
-          icon:  const Icon(Icons.check_circle_outline),
+          icon: const Icon(Icons.check_circle_outline),
           label: const Text('Acknowledge All Alerts'),
         ),
         const SizedBox(height: 24),
         _SectionHeader(
-          title:      'Alert History',
-          count:      history.isNotEmpty ? history.length : null,
+          title: 'Alert History',
+          count: history.isNotEmpty ? history.length : null,
           countColor: const Color(0xFF6E7A8C),
         ),
         const SizedBox(height: 6),
         const Text(
-          'Cleared alerts are kept here permanently for this session.',
+          'All triggered alerts are kept here permanently.',
           style: TextStyle(fontSize: 12, color: Color(0xFF9BAEC8)),
         ),
         const SizedBox(height: 10),
         if (history.isEmpty)
-          const _EmptyStateCard(
-              message: 'No alert history yet. '
-                  'Cleared alerts will appear here once sensors return to safe levels.')
+          const _EmptyStateCard(message: 'No alert history yet. Triggered alerts will appear here.')
         else
           ...history.map((a) => _AlertHistoryCard(alert: a)),
       ],
@@ -1585,30 +1405,20 @@ class _AlertHistoryCard extends StatelessWidget {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
-                  Expanded(
-                    child: Text(alert.title,
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.bold,
-                            color: Color(0xFF142A45))),
-                  ),
+                  Expanded(child: Text(alert.title,
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF142A45)))),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE6EEF8),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text('Resolved',
-                        style: TextStyle(
-                            fontSize: 11, color: Color(0xFF5D6E84),
-                            fontWeight: FontWeight.w600)),
+                    decoration: BoxDecoration(color: const Color(0xFFE6EEF8), borderRadius: BorderRadius.circular(8)),
+                    child: const Text('Logged',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF5D6E84), fontWeight: FontWeight.w600)),
                   ),
                 ]),
                 const SizedBox(height: 3),
                 Text('Node ${alert.mineId} · ${_formatTimestamp(alert.timestamp)}',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF9BAEC8))),
                 const SizedBox(height: 4),
-                Text(alert.description,
-                    maxLines: 2, overflow: TextOverflow.ellipsis,
+                Text(alert.description, maxLines: 2, overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 13, color: Color(0xFF5D6E84))),
               ]),
             ),
@@ -1626,12 +1436,8 @@ class _AlertHistoryCard extends StatelessWidget {
 
 class MapTab extends StatelessWidget {
   const MapTab({
-    super.key,
-    required this.mines,
-    required this.alerts,
-    this.currentPosition,
-    this.locationStatus,
-    required this.onRefreshLocation,
+    super.key, required this.mines, required this.alerts,
+    this.currentPosition, this.locationStatus, required this.onRefreshLocation,
   });
   final List<MineStatus> mines;
   final List<AlertEvent> alerts;
@@ -1647,45 +1453,33 @@ class MapTab extends StatelessWidget {
         ? LatLng(currentPosition!.latitude, currentPosition!.longitude)
         : _deviceLocation;
 
-    final markers = <Marker>[];
-
-    markers.add(Marker(
-      width: 130, height: 80,
-      point: _deviceLocation,
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.location_on, color: Color(0xFF2E7DFF), size: 36),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: BoxDecoration(
-              color: const Color(0xFF0F1D2C),
-              borderRadius: BorderRadius.circular(8)),
-          child: const Text('MP-001 Device',
-              style: TextStyle(color: Colors.white, fontSize: 11)),
-        ),
-      ]),
-    ));
+    final markers = <Marker>[
+      Marker(
+        width: 130, height: 80, point: _deviceLocation,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.location_on, color: Color(0xFF2E7DFF), size: 36),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(color: const Color(0xFF0F1D2C), borderRadius: BorderRadius.circular(8)),
+            child: const Text('MP-001 Device', style: TextStyle(color: Colors.white, fontSize: 11)),
+          ),
+        ]),
+      ),
+    ];
 
     for (final mine in mines) {
-      if (!mine.online) continue;
-      if (mine.id == 'MP-001') continue;
-      final isAlert = alerts.any((a) =>
-          a.mineId == mine.id && a.severity != AlertSeverity.safe);
+      if (!mine.online || mine.id == 'MP-001') continue;
+      final isAlert = alerts.any((a) => a.mineId == mine.id && a.severity != AlertSeverity.safe);
       markers.add(Marker(
         width: 130, height: 80,
         point: LatLng(mine.latitude, mine.longitude),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(
-            isAlert ? Icons.warning_amber_rounded : Icons.location_on_outlined,
-            color: isAlert ? Colors.redAccent : Colors.lightBlueAccent,
-            size: 34,
-          ),
+          Icon(isAlert ? Icons.warning_amber_rounded : Icons.location_on_outlined,
+              color: isAlert ? Colors.redAccent : Colors.lightBlueAccent, size: 34),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-            decoration: BoxDecoration(
-                color: const Color(0xFF0F1D2C),
-                borderRadius: BorderRadius.circular(8)),
-            child: Text(mine.name,
-                style: const TextStyle(color: Colors.white, fontSize: 10)),
+            decoration: BoxDecoration(color: const Color(0xFF0F1D2C), borderRadius: BorderRadius.circular(8)),
+            child: Text(mine.name, style: const TextStyle(color: Colors.white, fontSize: 10)),
           ),
         ]),
       ));
@@ -1696,17 +1490,13 @@ class MapTab extends StatelessWidget {
       if ((userLoc.latitude - _deviceLocation.latitude).abs() > 0.001 ||
           (userLoc.longitude - _deviceLocation.longitude).abs() > 0.001) {
         markers.add(Marker(
-          width: 100, height: 80,
-          point: userLoc,
+          width: 100, height: 80, point: userLoc,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.my_location, color: Color(0xFF57D27A), size: 34),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                  color: const Color(0xFF0F1D2C),
-                  borderRadius: BorderRadius.circular(8)),
-              child: const Text('You',
-                  style: TextStyle(color: Colors.white, fontSize: 11)),
+              decoration: BoxDecoration(color: const Color(0xFF0F1D2C), borderRadius: BorderRadius.circular(8)),
+              child: const Text('You', style: TextStyle(color: Colors.white, fontSize: 11)),
             ),
           ]),
         ));
@@ -1718,10 +1508,8 @@ class MapTab extends StatelessWidget {
         child: FlutterMap(
           options: MapOptions(initialCenter: center, initialZoom: 12.0),
           children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.mine_pulse',
-            ),
+            TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.mine_pulse'),
             MarkerLayer(markers: markers),
           ],
         ),
@@ -1731,11 +1519,8 @@ class MapTab extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Expanded(
-              child: Text('Mine site: Kuruwita, Ratnapura, Sri Lanka',
-                  style: TextStyle(
-                      color: Color(0xFF142A45), fontWeight: FontWeight.w600)),
-            ),
+            const Expanded(child: Text('Mine site: Kuruwita, Ratnapura, Sri Lanka',
+                style: TextStyle(color: Color(0xFF142A45), fontWeight: FontWeight.w600))),
             IconButton(
               icon: const Icon(Icons.my_location, color: Color(0xFF0057FF)),
               tooltip: 'Refresh location',
@@ -1744,8 +1529,7 @@ class MapTab extends StatelessWidget {
           ]),
           if (locationStatus != null) ...[
             const SizedBox(height: 4),
-            Text(locationStatus!,
-                style: const TextStyle(color: Color(0xFF3D5481), fontSize: 13)),
+            Text(locationStatus!, style: const TextStyle(color: Color(0xFF3D5481), fontSize: 13)),
           ],
         ]),
       ),
@@ -1769,14 +1553,13 @@ class AnalyticsTab extends StatelessWidget {
     final warning  = activeAlerts.where((a) => a.severity == AlertSeverity.warning).length;
     final total    = activeAlerts.length;
     final methane  = activeAlerts.where((a) => a.title.toLowerCase().contains('methane')).length;
-    final carbon   = activeAlerts.where((a) => a.title.toLowerCase().contains('carbon')).length;
+    final carbon   = activeAlerts.where((a) => a.title.toLowerCase().contains('carbon') || a.title.toLowerCase().contains('co')).length;
     final water    = activeAlerts.where((a) => a.title.toLowerCase().contains('water')).length;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
-        const Text('Analytics',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const Text('Analytics', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
         const Text('Real-time trends for the mine safety network.',
             style: TextStyle(fontSize: 15, color: Color(0xFF5D6E84))),
@@ -1788,8 +1571,7 @@ class AnalyticsTab extends StatelessWidget {
         ]),
         const SizedBox(height: 22),
         _AnalyticsCard(
-          title:    'Hazard Type Distribution',
-          subtitle: 'Number of alerts per hazard category',
+          title: 'Hazard Type Distribution', subtitle: 'Alerts per hazard category',
           child: _BarChart(bars: [
             _BarData('Methane', methane, const Color(0xFFFF7043)),
             _BarData('CO',      carbon,  const Color(0xFF42A5F5)),
@@ -1798,19 +1580,16 @@ class AnalyticsTab extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         _AnalyticsCard(
-          title:    'Alert Severity Breakdown',
-          subtitle: 'Proportion of critical vs warning alerts',
-          child:    _SeverityStackedBar(critical: critical, warning: warning),
+          title: 'Alert Severity Breakdown', subtitle: 'Critical vs warning proportion',
+          child: _SeverityStackedBar(critical: critical, warning: warning),
         ),
         const SizedBox(height: 16),
         _AnalyticsCard(
-          title:    'Sensor Readings per Node',
-          subtitle: 'Current MQ-4 (methane) and MQ-7 (CO) values',
-          child:    _SensorGroupedBars(mines: mines),
+          title: 'Sensor Readings per Node', subtitle: 'Current MQ-4 and MQ-7 values',
+          child: _SensorGroupedBars(mines: mines),
         ),
         const SizedBox(height: 22),
-        const Text('Activity Summary',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const Text('Activity Summary', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
         Card(
           color: const Color(0xFFFFFFFF),
@@ -1847,12 +1626,9 @@ class _AnalyticsCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title,
-              style: const TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
+          Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
           const SizedBox(height: 4),
-          Text(subtitle,
-              style: const TextStyle(fontSize: 13, color: Color(0xFF8FA6C0))),
+          Text(subtitle, style: const TextStyle(fontSize: 13, color: Color(0xFF8FA6C0))),
           const SizedBox(height: 16),
           child,
         ]),
@@ -1863,9 +1639,7 @@ class _AnalyticsCard extends StatelessWidget {
 
 class _BarData {
   const _BarData(this.label, this.value, this.color);
-  final String label;
-  final int    value;
-  final Color  color;
+  final String label; final int value; final Color color;
 }
 
 class _BarChart extends StatelessWidget {
@@ -1876,41 +1650,25 @@ class _BarChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final maxVal = bars.fold<int>(1, (prev, b) => b.value > prev ? b.value : prev);
     const chartHeight = 80.0;
-
     return SizedBox(
       height: chartHeight + 44,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: bars.map((bar) {
-          final frac = maxVal == 0 ? 0.05 : (bar.value / maxVal).clamp(0.05, 1.0);
-          return Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(bar.value.toString(),
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.bold, color: bar.color)),
-                  const SizedBox(height: 4),
-                  Container(
-                    height: chartHeight * frac,
-                    decoration: BoxDecoration(
-                      color: bar.color,
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(bar.label,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF5D6E84))),
-                ],
-              ),
-            ),
-          );
-        }).toList(),
-      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: bars.map((bar) {
+        final frac = maxVal == 0 ? 0.05 : (bar.value / maxVal).clamp(0.05, 1.0);
+        return Expanded(child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Column(mainAxisAlignment: MainAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+            Text(bar.value.toString(),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: bar.color)),
+            const SizedBox(height: 4),
+            Container(height: chartHeight * frac,
+                decoration: BoxDecoration(color: bar.color,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(8)))),
+            const SizedBox(height: 6),
+            Text(bar.label, textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF5D6E84))),
+          ]),
+        ));
+      }).toList()),
     );
   }
 }
@@ -1921,36 +1679,23 @@ class _SeverityStackedBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final total     = (critical + warning).toDouble();
+    final total = (critical + warning).toDouble();
     final safeTotal = total == 0 ? 1.0 : total;
-
     Widget seg(int count, Color color) => Expanded(
-          flex: count == 0 ? 0 : ((count / safeTotal) * 100).round(),
-          child: count == 0
-              ? const SizedBox.shrink()
-              : Container(
-                  height: 36, color: color,
-                  alignment: Alignment.center,
-                  child: Text(count.toString(),
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold,
-                          fontSize: 13)),
-                ),
-        );
-
+      flex: count == 0 ? 0 : ((count / safeTotal) * 100).round(),
+      child: count == 0 ? const SizedBox.shrink() : Container(
+        height: 36, color: color, alignment: Alignment.center,
+        child: Text(count.toString(),
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+      ),
+    );
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: total == 0
-            ? Container(
-                height: 36, color: const Color(0xFFE6F0FF),
-                alignment: Alignment.center,
-                child: const Text('No alerts',
-                    style: TextStyle(color: Color(0xFF8FA6C0))))
-            : Row(children: [
-                seg(critical, const Color(0xFFFF5C5C)),
-                seg(warning,  const Color(0xFFFFC107)),
-              ]),
+            ? Container(height: 36, color: const Color(0xFFE6F0FF), alignment: Alignment.center,
+                child: const Text('No alerts', style: TextStyle(color: Color(0xFF8FA6C0))))
+            : Row(children: [seg(critical, const Color(0xFFFF5C5C)), seg(warning, const Color(0xFFFFC107))]),
       ),
       const SizedBox(height: 12),
       const Row(children: [
@@ -1964,15 +1709,12 @@ class _SeverityStackedBar extends StatelessWidget {
 
 class _LegendDot extends StatelessWidget {
   const _LegendDot({required this.color, required this.label});
-  final Color  color;
-  final String label;
+  final Color color; final String label;
 
   @override
   Widget build(BuildContext context) {
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-          width: 10, height: 10,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+      Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
       const SizedBox(width: 4),
       Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF5D6E84))),
     ]);
@@ -1986,17 +1728,12 @@ class _SensorGroupedBars extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final online = mines.where((m) => m.online).toList();
-    if (online.isEmpty) {
-      return const Text('No sensor data available.',
-          style: TextStyle(color: Color(0xFF8FA6C0)));
-    }
-
+    if (online.isEmpty) return const Text('No sensor data available.', style: TextStyle(color: Color(0xFF8FA6C0)));
     int maxVal = 1;
     for (final m in online) {
       if (m.mq4 > maxVal) maxVal = m.mq4;
       if (m.mq7 > maxVal) maxVal = m.mq7;
     }
-
     return Column(children: [
       const Row(children: [
         _LegendDot(color: Color(0xFFFF7043), label: 'MQ-4 Methane (ppm)'),
@@ -2010,49 +1747,26 @@ class _SensorGroupedBars extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.only(bottom: 14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(mine.name,
-                style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600,
-                    color: Color(0xFF142A45))),
+            Text(mine.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF142A45))),
             const SizedBox(height: 6),
             Row(children: [
-              const SizedBox(width: 28,
-                  child: Text('CH4',
-                      style: TextStyle(
-                          fontSize: 11, color: Color(0xFFFF7043),
-                          fontWeight: FontWeight.bold))),
-              Expanded(child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: f4 == 0 ? 0.02 : f4,
-                  minHeight: 12,
-                  color: const Color(0xFFFF7043),
-                  backgroundColor: const Color(0xFFE6F0FF),
-                ),
-              )),
+              const SizedBox(width: 28, child: Text('CH4', style: TextStyle(fontSize: 11, color: Color(0xFFFF7043), fontWeight: FontWeight.bold))),
+              Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(value: f4 == 0 ? 0.02 : f4, minHeight: 12,
+                      color: mine.ch4High ? const Color(0xFFD62828) : const Color(0xFFFF7043),
+                      backgroundColor: const Color(0xFFE6F0FF)))),
               const SizedBox(width: 8),
-              Text('${mine.mq4} ppm',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF5D6E84))),
+              Text('${mine.mq4} ppm', style: const TextStyle(fontSize: 12, color: Color(0xFF5D6E84))),
             ]),
             const SizedBox(height: 4),
             Row(children: [
-              const SizedBox(width: 28,
-                  child: Text('CO',
-                      style: TextStyle(
-                          fontSize: 11, color: Color(0xFF42A5F5),
-                          fontWeight: FontWeight.bold))),
-              Expanded(child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: f7 == 0 ? 0.02 : f7,
-                  minHeight: 12,
-                  color: const Color(0xFF42A5F5),
-                  backgroundColor: const Color(0xFFE6F0FF),
-                ),
-              )),
+              const SizedBox(width: 28, child: Text('CO', style: TextStyle(fontSize: 11, color: Color(0xFF42A5F5), fontWeight: FontWeight.bold))),
+              Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(value: f7 == 0 ? 0.02 : f7, minHeight: 12,
+                      color: mine.coHigh ? const Color(0xFFD62828) : const Color(0xFF42A5F5),
+                      backgroundColor: const Color(0xFFE6F0FF)))),
               const SizedBox(width: 8),
-              Text('${mine.mq7} ppm',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF5D6E84))),
+              Text('${mine.mq7} ppm', style: const TextStyle(fontSize: 12, color: Color(0xFF5D6E84))),
             ]),
           ]),
         );
@@ -2067,11 +1781,8 @@ class _SensorGroupedBars extends StatelessWidget {
 
 class SettingsTab extends StatefulWidget {
   const SettingsTab({
-    super.key,
-    required this.onEmergencyCall,
-    required this.onEmergencySms,
-    this.userEmail,
-    this.onSignOut,
+    super.key, required this.onEmergencyCall, required this.onEmergencySms,
+    this.userEmail, this.onSignOut,
   });
   final VoidCallback onEmergencyCall, onEmergencySms;
   final String?      userEmail;
@@ -2094,10 +1805,8 @@ class _SettingsTabState extends State<SettingsTab> {
 
   @override
   void dispose() {
-    _emergencyCtrl.dispose();
-    _methaneCtrl.dispose();
-    _coCtrl.dispose();
-    _workersCtrl.dispose();
+    _emergencyCtrl.dispose(); _methaneCtrl.dispose();
+    _coCtrl.dispose(); _workersCtrl.dispose();
     super.dispose();
   }
 
@@ -2106,148 +1815,96 @@ class _SettingsTabState extends State<SettingsTab> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
-        const Text('System Settings',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const Text('System Settings', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
         _SettingsSection(title: 'Alert Thresholds', children: [
-          TextField(
-              controller: _methaneCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                  labelText: 'Methane threshold (ppm) — default 100',
+          TextField(controller: _methaneCtrl, keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Methane threshold (ppm) — default 100',
                   filled: true, fillColor: Color(0xFFF4F8FF))),
           const SizedBox(height: 10),
-          TextField(
-              controller: _coCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                  labelText: 'CO threshold (ppm) — default 150',
+          TextField(controller: _coCtrl, keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'CO threshold (ppm) — default 150',
                   filled: true, fillColor: Color(0xFFF4F8FF))),
         ]),
         const SizedBox(height: 12),
         _SettingsSection(title: 'Emergency Contacts', children: [
-          TextField(
-              controller: _emergencyCtrl,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(
-                  labelText: 'Primary SMS number',
+          TextField(controller: _emergencyCtrl, keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Primary SMS number',
                   filled: true, fillColor: Color(0xFFF4F8FF))),
           const SizedBox(height: 10),
           Row(children: [
-            Expanded(child: ElevatedButton.icon(
-                icon: const Icon(Icons.call),
-                label: const Text('Quick SOS'),
-                onPressed: widget.onEmergencyCall)),
+            Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.call),    label: const Text('Quick SOS'), onPressed: widget.onEmergencyCall)),
             const SizedBox(width: 12),
-            Expanded(child: ElevatedButton.icon(
-                icon: const Icon(Icons.message),
-                label: const Text('Message'),
-                onPressed: widget.onEmergencySms)),
+            Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.message), label: const Text('Message'),   onPressed: widget.onEmergencySms)),
           ]),
         ]),
         const SizedBox(height: 12),
         _SettingsSection(title: 'Daily Workforce Update', children: [
-          TextField(
-            controller: _workersCtrl,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-                labelText: 'Workers on duty today',
-                filled: true, fillColor: Color(0xFFF4F8FF)),
-            onChanged: (_) => setState(() => _workersSaved = false),
-          ),
+          TextField(controller: _workersCtrl, keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Workers on duty today',
+                  filled: true, fillColor: Color(0xFFF4F8FF)),
+              onChanged: (_) => setState(() => _workersSaved = false)),
           const SizedBox(height: 10),
           InkWell(
             onTap: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _selectedDate,
-                firstDate: DateTime(2024),
-                lastDate: DateTime(2100),
-              );
-              if (picked != null) {
-                setState(() { _selectedDate = picked; _workersSaved = false; });
-              }
+              final picked = await showDatePicker(context: context,
+                  initialDate: _selectedDate, firstDate: DateTime(2024), lastDate: DateTime(2100));
+              if (picked != null) setState(() { _selectedDate = picked; _workersSaved = false; });
             },
             borderRadius: BorderRadius.circular(14),
             child: Container(
               padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                  color: const Color(0xFFF4F8FF),
-                  borderRadius: BorderRadius.circular(14)),
+              decoration: BoxDecoration(color: const Color(0xFFF4F8FF), borderRadius: BorderRadius.circular(14)),
               child: Row(children: [
                 const Icon(Icons.calendar_today, color: Color(0xFF0057FF)),
                 const SizedBox(width: 10),
                 Text(
-                  'Date: '
-                  '${_selectedDate.day.toString().padLeft(2, '0')}/'
-                  '${_selectedDate.month.toString().padLeft(2, '0')}/'
-                  '${_selectedDate.year}',
+                  'Date: ${_selectedDate.day.toString().padLeft(2,'0')}/'
+                  '${_selectedDate.month.toString().padLeft(2,'0')}/${_selectedDate.year}',
                   style: const TextStyle(color: Color(0xFF142A45), fontSize: 15),
                 ),
               ]),
             ),
           ),
           const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
+          SizedBox(width: double.infinity,
             child: ElevatedButton.icon(
               icon: const Icon(Icons.save),
               label: Text(_workersSaved ? 'Saved!' : 'Save Workforce Record'),
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: _workersSaved ? const Color(0xFF57D27A) : null),
+              style: ElevatedButton.styleFrom(backgroundColor: _workersSaved ? const Color(0xFF57D27A) : null),
               onPressed: () {
                 setState(() => _workersSaved = true);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text(
-                    'Saved: ${_workersCtrl.text.isEmpty ? '0' : _workersCtrl.text}'
-                    ' workers on '
-                    '${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}',
-                  ),
-                ));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+                  'Saved: ${_workersCtrl.text.isEmpty ? '0' : _workersCtrl.text} workers on '
+                  '${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}')));
               },
             ),
           ),
           if (_workersSaved) ...[
             const SizedBox(height: 6),
-            Text(
-              'Record saved: ${_workersCtrl.text} workers on '
-              '${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}',
-              style: const TextStyle(color: Color(0xFF57D27A), fontSize: 13),
-            ),
+            Text('Record saved: ${_workersCtrl.text} workers on '
+                '${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}',
+                style: const TextStyle(color: Color(0xFF57D27A), fontSize: 13)),
           ],
         ]),
         const SizedBox(height: 12),
         _SettingsSection(title: 'Operational Controls', children: [
-          SwitchListTile(
-              title: const Text('Push notifications'),
-              value: _pushAlerts,
-              onChanged: (v) => setState(() => _pushAlerts = v)),
-          SwitchListTile(
-              title: const Text('SMS alerts'),
-              value: _smsAlerts,
-              onChanged: (v) => setState(() => _smsAlerts = v)),
-          SwitchListTile(
-              title: const Text('Live map updates'),
-              value: _liveMap,
-              onChanged: (v) => setState(() => _liveMap = v)),
+          SwitchListTile(title: const Text('Push notifications'), value: _pushAlerts, onChanged: (v) => setState(() => _pushAlerts = v)),
+          SwitchListTile(title: const Text('SMS alerts'),         value: _smsAlerts,  onChanged: (v) => setState(() => _smsAlerts  = v)),
+          SwitchListTile(title: const Text('Live map updates'),   value: _liveMap,    onChanged: (v) => setState(() => _liveMap    = v)),
         ]),
         const SizedBox(height: 12),
         _SettingsSection(title: 'Account', children: [
-          ListTile(
-            title: const Text('Signed in as'),
-            subtitle: Text(widget.userEmail ?? 'Not signed in'),
-            leading: const Icon(Icons.person_outline),
-          ),
+          ListTile(title: const Text('Signed in as'),
+              subtitle: Text(widget.userEmail ?? 'Not signed in'), leading: const Icon(Icons.person_outline)),
           if (widget.onSignOut != null)
             ElevatedButton.icon(
-              icon: const Icon(Icons.logout),
-              label: const Text('Sign Out'),
+              icon: const Icon(Icons.logout), label: const Text('Sign Out'),
               onPressed: () async {
                 final messenger = ScaffoldMessenger.of(context);
                 await widget.onSignOut!();
                 if (!mounted) return;
-                messenger.showSnackBar(
-                    const SnackBar(content: Text('Signed out successfully.')));
+                messenger.showSnackBar(const SnackBar(content: Text('Signed out successfully.')));
               },
             ),
         ]),
@@ -2258,22 +1915,18 @@ class _SettingsTabState extends State<SettingsTab> {
 
 class _SettingsSection extends StatelessWidget {
   const _SettingsSection({required this.title, required this.children});
-  final String       title;
-  final List<Widget> children;
+  final String title; final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       color: const Color(0xFFFFFFFF),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      elevation: 4,
-      margin: const EdgeInsets.symmetric(vertical: 8),
+      elevation: 4, margin: const EdgeInsets.symmetric(vertical: 8),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title,
-              style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
+          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF142A45))),
           const SizedBox(height: 12),
           ...children,
         ]),
