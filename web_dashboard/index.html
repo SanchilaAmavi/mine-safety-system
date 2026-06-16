@@ -3,142 +3,887 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Mine Pulse Dashboard</title>
+  <title>Mine Pulse — Safety Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
+    /* ══════════════════════════════════════════
+       TOKENS
+    ══════════════════════════════════════════ */
     :root {
-      --bg: #eaf3ff;
-      --panel: #ffffff;
-      --surface: #ffffff;
-      --text: #12263f;
-      --muted: #5f738f;
-      --accent: #1e56ff;
-      --accent-soft: rgba(30, 86, 255, 0.12);
-      --danger: #d92f2f;
-      --success: #2a8f4f;
-      --border: rgba(16, 52, 92, 0.08);
+
+  /* ===== Backgrounds (soft light, not too bright) ===== */
+  --bg:           #eef2f7;   /* main app background (soft gray-blue) */
+  --surface:      #ffffff;   /* cards */
+  --surface-2:    #f6f8fc;   /* elevated sections */
+  --surface-3:    #e9eef6;   /* hover / nested panels */
+
+  /* ===== Borders (subtle but visible) ===== */
+  --border:       rgba(15, 23, 42, 0.08);
+  --border-bright:rgba(15, 23, 42, 0.14);
+
+  /* ===== Primary Accent ===== */
+  --accent:       #2563eb;
+  --accent-dim:   rgba(37, 99, 235, 0.12);
+  --accent-glow:  rgba(37, 99, 235, 0.22);
+
+  /* ===== Status Colors ===== */
+  --danger:       #ef4444;
+  --danger-dim:   rgba(239, 68, 68, 0.12);
+  --danger-glow:  rgba(239, 68, 68, 0.22);
+
+  --warning:      #f59e0b;
+  --warning-dim:  rgba(245, 158, 11, 0.12);
+
+  --success:      #22c55e;
+  --success-dim:  rgba(34, 197, 94, 0.12);
+
+  /* ===== Sensor Colors ===== */
+  --ch4:          #ff6b4a;
+  --co:           #0ea5e9;
+  --water:        #14b8a6;
+
+  /* ===== Text (soft dark, not pure black) ===== */
+  --text:         #0f172a;
+  --text-2:       #334155;
+  --text-3:       #64748b;
+
+  /* ===== Fonts (modern clean UI) ===== */
+  --sans:         'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono:         'JetBrains Mono', 'Fira Code', monospace;
+
+  /* ===== Radius ===== */
+  --radius:       16px;
+  --radius-sm:    12px;
+  --radius-xs:    8px;
+}
+    /* ══════════════════════════════════════════
+       RESET & BASE
+    ══════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
     }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, rgba(30,86,255,0.14), transparent 24%), radial-gradient(circle at bottom right, rgba(34,198,255,0.12), transparent 20%), #eef5ff; color: var(--text); font-family: Inter, system-ui, sans-serif; }
-    main { max-width: 1180px; margin: 0 auto; padding-bottom: 40px; }
-    header { padding: 32px 24px 18px; display: flex; align-items: center; gap: 18px; }
-    header img { width: 56px; height: 56px; border-radius: 16px; object-fit: cover; }
-    header .brand { display: grid; gap: 6px; }
-    header .brand h1 { margin: 0; font-size: 1.8rem; letter-spacing: -0.03em; }
-    header .brand p { margin: 0; color: var(--muted); max-width: 660px; line-height: 1.6; }
-    main { padding: 0 24px 40px; }
-    .top-panel { display: grid; gap: 18px; grid-template-columns: 1.8fr 1fr; margin-bottom: 28px; }
-    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 24px 54px rgba(16, 52, 92, 0.08); }
-    .panel h2 { margin: 0 0 12px; font-size: 1.05rem; letter-spacing: 0.03em; color: var(--accent); }
-    .panel p { margin: 0; color: var(--muted); line-height: 1.75; }
-    .status-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 28px; }
-    .status-card { background: var(--surface); border: 1px solid var(--border); border-radius: 22px; padding: 24px; min-height: 220px; box-shadow: 0 20px 42px rgba(16, 52, 92, 0.08); transition: transform 0.18s ease; }
-    .status-card:hover { transform: translateY(-2px); }
-    .status-card h3 { margin: 0 0 10px; font-size: 1.1rem; color: var(--text); }
-    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; font-size: 0.95rem; font-weight: 600; }
-    .badge-danger { background: rgba(214,40,40,0.12); color: var(--danger); }
-    .badge-warning { background: rgba(255, 171, 0, 0.16); color: #bf7100; }
-    .badge-success { background: rgba(35,134,54,0.16); color: var(--success); }
-    .stat-row { display: grid; gap: 10px; margin-top: 16px; }
-    .stat-row div { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.95rem; }
-    .metric-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 28px; }
-    .metric-card { background: #FFFFFF; border: 1px solid var(--border); border-radius: 20px; padding: 22px; box-shadow: 0 18px 40px rgba(16, 52, 92, 0.05); }
-    .metric-card h3 { margin: 0; font-size: 0.95rem; color: var(--muted); letter-spacing: 0.03em; }
-    .metric-card p { margin: 12px 0 0; font-size: 2rem; color: var(--text); font-weight: 800; }
-    .auth-card { background: linear-gradient(180deg, rgba(255,255,255,0.96), #ffffff); border: 1px solid rgba(255,255,255,0.7); border-radius: 28px; padding: 32px; margin-bottom: 32px; box-shadow: 0 36px 90px rgba(16, 52, 92, 0.10); backdrop-filter: blur(10px); }
-    .auth-card h2 { margin: 0 0 16px; font-size: 1.1rem; letter-spacing: 0.03em; color: #1745d4; }
-    .auth-card input { width: 100%; border: 1px solid rgba(16, 52, 92, 0.12); border-radius: 16px; padding: 16px 18px; margin-top: 10px; font-size: 1rem; color: var(--text); background: #f5faff; }
-    .auth-actions { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 18px; }
-    .auth-actions button { flex: 1 1 160px; border: none; border-radius: 16px; padding: 16px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease; }
-    .auth-actions button:hover { transform: translateY(-2px); box-shadow: 0 18px 40px rgba(16, 52, 92, 0.12); }
-    .auth-actions .primary { background: var(--accent); color: white; }
-    .auth-actions .secondary { background: #f4f8ff; color: var(--text); border: 1px solid rgba(16, 52, 92, 0.12); }
-    .auth-actions .google { background: #4285f4; color: white; box-shadow: inset 0 -1px 0 rgba(255,255,255,0.18); }
-    .sign-out { width: 100%; margin-top: 14px; }
-    .auth-message { margin-top: 16px; color: var(--danger); }
-    .hidden { display: none !important; }
-    .signed-in { margin-top: 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-    .signed-in span { color: var(--text); font-weight: 600; }
-    .sign-out { background: #FFECEB; color: var(--danger); border: 1px solid rgba(214, 40, 40, 0.18); }
-    .settings-panel { display: grid; gap: 14px; margin-top: 10px; }
-    .history-item { background: #F8FBFF; border-radius: 16px; border: 1px solid var(--border); padding: 18px; }
-    .history-header { margin: 0 0 8px; font-size: 1rem; color: var(--text); font-weight: 700; }
-    .history-details { display: grid; gap: 8px; color: var(--text); font-size: 0.95rem; }
-    footer { text-align: center; color: var(--muted); font-size: 0.95rem; margin-top: 32px; }
-    .hidden { display: none !important; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    #dashboardContent { animation: fadeIn 0.45s ease both; }
-    @media (max-width: 900px) { .top-panel { grid-template-columns: 1fr; } }
+    button { font-family: var(--sans); cursor: pointer; }
+    a { color: inherit; text-decoration: none; }
+
+    /* ══════════════════════════════════════════
+       LAYOUT SHELL
+    ══════════════════════════════════════════ */
+    .shell { display: flex; height: 100vh; overflow: hidden; }
+
+    /* ══════════════════════════════════════════
+       SIDEBAR
+    ══════════════════════════════════════════ */
+    .sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 20px 0;
+      z-index: 20;
+    }
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 0 20px 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+    .brand-logo {
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #1a56ff 0%, #2e7dff 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 15px; color: #fff;
+      box-shadow: 0 4px 16px rgba(46,125,255,0.35);
+      flex-shrink: 0;
+    }
+    .brand-text { line-height: 1.2; }
+    .brand-name { font-size: 15px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
+    .brand-sub  { font-size: 11px; color: var(--text-3); font-weight: 500; }
+
+    .nav-section-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--text-3);
+      padding: 10px 20px 6px;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 20px;
+      border-radius: 0;
+      background: transparent;
+      border: none;
+      color: var(--text-2);
+      font-size: 13.5px;
+      font-weight: 500;
+      width: 100%;
+      text-align: left;
+      transition: background 0.15s, color 0.15s;
+      position: relative;
+      cursor: pointer;
+    }
+    .nav-item svg { flex-shrink: 0; opacity: 0.7; transition: opacity 0.15s; }
+    .nav-item:hover { background: var(--surface-2); color: var(--text); }
+    .nav-item:hover svg { opacity: 1; }
+    .nav-item.active {
+      background: var(--accent-dim);
+      color: #fff;
+      font-weight: 600;
+    }
+    .nav-item.active::before {
+      content: '';
+      position: absolute; left: 0; top: 4px; bottom: 4px;
+      width: 3px; border-radius: 0 3px 3px 0;
+      background: var(--accent);
+    }
+    .nav-item.active svg { opacity: 1; }
+    .nav-badge {
+      margin-left: auto;
+      background: var(--danger);
+      color: #fff; font-size: 10px; font-weight: 700;
+      border-radius: 999px; padding: 1px 6px;
+      min-width: 18px; text-align: center;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+    }
+    .conn-indicator {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: var(--text-2);
+    }
+    .conn-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--warning);
+      transition: background 0.4s;
+      flex-shrink: 0;
+    }
+    .conn-dot.connected { background: var(--success); box-shadow: 0 0 8px var(--success); animation: pulse-dot 2s infinite; }
+    .conn-dot.error { background: var(--danger); }
+    @keyframes pulse-dot {
+      0%, 100% { box-shadow: 0 0 6px var(--success); }
+      50% { box-shadow: 0 0 14px var(--success); }
+    }
+
+    /* ══════════════════════════════════════════
+       MAIN CONTENT
+    ══════════════════════════════════════════ */
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── TOPBAR ── */
+    .topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .topbar-left h2 {
+      font-size: 17px; font-weight: 700; color: var(--text);
+      letter-spacing: -0.02em;
+    }
+    .topbar-left p { font-size: 12px; color: var(--text-3); }
+    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .topbar-time {
+      font-family: var(--mono); font-size: 12px; color: var(--text-2);
+      background: var(--surface-2); border: 1px solid var(--border);
+      padding: 6px 12px; border-radius: var(--radius-sm);
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: var(--radius-sm);
+      font-size: 13px; font-weight: 600;
+      border: none; transition: all 0.18s;
+    }
+    .btn-ghost {
+      background: var(--surface-2); color: var(--text-2);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { background: var(--surface-3); color: var(--text); border-color: var(--border-bright); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: #e53e3e; box-shadow: 0 4px 16px var(--danger-glow); }
+
+    /* ── PAGE ── */
+    .page { padding: 24px 28px 40px; flex: 1; }
+    .view-panel { display: none; }
+    .view-panel.active { display: block; }
+
+    /* ══════════════════════════════════════════
+       STATUS BANNER
+    ══════════════════════════════════════════ */
+    .status-banner {
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: flex; align-items: center; gap: 14px;
+      margin-bottom: 22px;
+      border: 1px solid;
+      transition: all 0.4s;
+    }
+    .status-banner.safe {
+      background: var(--success-dim);
+      border-color: rgba(34,197,94,0.25);
+    }
+    .status-banner.alert {
+      background: var(--danger-dim);
+      border-color: rgba(255,77,77,0.3);
+      box-shadow: 0 0 0 1px rgba(255,77,77,0.15), 0 8px 32px rgba(255,77,77,0.1);
+    }
+    .banner-icon { font-size: 22px; flex-shrink: 0; }
+    .banner-title { font-size: 15px; font-weight: 700; }
+    .banner-sub   { font-size: 12px; opacity: 0.75; margin-top: 1px; }
+    .banner-pulse {
+      margin-left: auto;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--danger); flex-shrink: 0;
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* ══════════════════════════════════════════
+       METRICS ROW
+    ══════════════════════════════════════════ */
+    .metrics-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .metric:hover { transform: translateY(-2px); border-color: var(--border-bright); }
+    .metric::after {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: var(--accent);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .metric:hover::after { opacity: 1; }
+    .metric-label { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-3); }
+    .metric-value {
+      font-size: 32px; font-weight: 800;
+      letter-spacing: -0.04em;
+      margin: 6px 0 4px;
+      font-family: var(--mono);
+    }
+    .metric-value.v-danger  { color: var(--danger); }
+    .metric-value.v-success { color: var(--success); }
+    .metric-value.v-accent  { color: var(--accent); }
+    .metric-value.v-warning { color: var(--warning); }
+    .metric-sub { font-size: 12px; color: var(--text-3); }
+
+    /* ══════════════════════════════════════════
+       NODE CARDS GRID
+    ══════════════════════════════════════════ */
+    .section-label {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.09em;
+      text-transform: uppercase; color: var(--text-3);
+      margin-bottom: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .section-label::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+
+    .nodes-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .node-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+    }
+    .node-card:hover { transform: translateY(-2px); }
+    .node-card.in-alert {
+      border-color: var(--danger);
+      box-shadow: 0 0 0 1px rgba(255,77,77,0.25), 0 12px 40px rgba(255,77,77,0.12);
+    }
+    .node-card.in-alert::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, var(--danger), #ff8c00);
+    }
+    .node-card.offline { opacity: 0.5; }
+
+    .node-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+    .node-title { font-size: 15px; font-weight: 700; color: var(--text); }
+    .node-id { font-size: 11px; color: var(--text-3); font-family: var(--mono); margin-top: 3px; }
+    .node-badges { display: flex; gap: 6px; }
+
+    .pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 10px; border-radius: 999px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    }
+    .pill-danger  { background: var(--danger-dim);  color: var(--danger); border: 1px solid rgba(255,77,77,0.3); }
+    .pill-success { background: var(--success-dim); color: var(--success); border: 1px solid rgba(34,197,94,0.25); }
+    .pill-warning { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(255,176,32,0.25); }
+    .pill-muted   { background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border); }
+
+    .sensors { display: grid; gap: 11px; }
+    .sensor-row { display: grid; gap: 5px; }
+    .sensor-top { display: flex; justify-content: space-between; align-items: center; }
+    .sensor-name {
+      font-size: 12px; color: var(--text-2);
+      display: flex; align-items: center; gap: 7px;
+    }
+    .sensor-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .sensor-val { font-size: 13px; font-weight: 700; font-family: var(--mono); }
+    .sensor-bar-bg { height: 3px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
+    .sensor-bar-fill { height: 3px; border-radius: 2px; transition: width 0.8s ease; }
+
+    .node-footer {
+      margin-top: 14px; padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .node-ts { font-size: 11px; color: var(--text-3); font-family: var(--mono); }
+
+    /* ══════════════════════════════════════════
+       CHARTS ROW
+    ══════════════════════════════════════════ */
+    .charts-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 320px;
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+    }
+    .chart-title { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); margin-bottom: 14px; }
+    .chart-wrap { position: relative; height: 160px; }
+
+    /* ══════════════════════════════════════════
+       ALERTS TAB
+    ══════════════════════════════════════════ */
+    .alerts-grid { display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+    .alerts-left { display: flex; flex-direction: column; gap: 14px; }
+    .alerts-right { display: flex; flex-direction: column; gap: 14px; }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .panel-title {
+      font-size: 13px; font-weight: 700;
+      color: var(--text); margin-bottom: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .panel-count {
+      background: var(--danger); color: #fff;
+      font-size: 10px; font-weight: 700;
+      padding: 2px 7px; border-radius: 999px;
+    }
+    .panel-count.muted { background: var(--surface-3); color: var(--text-3); }
+
+    .alert-list { display: flex; flex-direction: column; gap: 8px; }
+    .alert-row {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 13px 14px;
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      gap: 10px; align-items: start;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .alert-row:hover { border-color: var(--accent); background: var(--surface-3); }
+    .alert-row.critical { border-left: 3px solid var(--danger); }
+    .alert-row.warning  { border-left: 3px solid var(--warning); }
+    .alert-row.info     { border-left: 3px solid var(--accent); }
+    .alert-row.safe     { border-left: 3px solid var(--success); }
+
+    .alert-icon { font-size: 16px; margin-top: 1px; }
+    .alert-title-text { font-size: 13px; font-weight: 700; color: var(--text); }
+    .alert-meta  { font-size: 11px; color: var(--text-3); margin-top: 3px; font-family: var(--mono); }
+    .alert-desc  { font-size: 12px; color: var(--text-2); margin-top: 5px; }
+    .alert-sev   { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; flex-shrink: 0; }
+    .sev-critical { background: var(--danger-dim);  color: var(--danger); }
+    .sev-warning  { background: var(--warning-dim); color: var(--warning); }
+    .sev-info     { background: var(--accent-dim);  color: var(--accent); }
+    .sev-safe     { background: var(--success-dim); color: var(--success); }
+
+    .empty-state {
+      text-align: center; padding: 28px 20px;
+      color: var(--text-3); font-size: 13px;
+    }
+    .empty-state .icon { font-size: 28px; margin-bottom: 8px; }
+
+    /* detail panel */
+    .detail-panel { position: sticky; top: 84px; }
+    .detail-content { display: flex; flex-direction: column; gap: 10px; }
+    .detail-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-key { font-size: 12px; color: var(--text-3); }
+    .detail-val { font-size: 12px; font-weight: 600; color: var(--text); text-align: right; max-width: 55%; word-break: break-word; }
+    .detail-action {
+      background: var(--accent-dim); border: 1px solid rgba(46,125,255,0.3);
+      color: var(--accent); border-radius: var(--radius-sm);
+      padding: 10px; font-size: 12px; font-weight: 600;
+      margin-top: 4px; width: 100%; cursor: pointer;
+      transition: background 0.15s;
+    }
+    .detail-action:hover { background: rgba(46,125,255,0.25); }
+    .placeholder-detail {
+      text-align: center; padding: 32px 20px; color: var(--text-3); font-size: 13px;
+    }
+    .placeholder-detail .icon { font-size: 32px; margin-bottom: 10px; color: var(--text-3); }
+
+    /* ══════════════════════════════════════════
+       MAP TAB
+    ══════════════════════════════════════════ */
+    .map-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      height: 460px;
+      margin-bottom: 16px;
+    }
+    .map-wrap #leafletMap { height: 100%; width: 100%; }
+    .map-legend {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: flex; gap: 20px; flex-wrap: wrap;
+    }
+    .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    /* ══════════════════════════════════════════
+       ANALYTICS TAB
+    ══════════════════════════════════════════ */
+    .analytics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+    .analytics-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+    .stats-table { width: 100%; border-collapse: collapse; }
+    .stats-table th {
+      text-align: left; font-size: 11px; font-weight: 700;
+      letter-spacing: 0.07em; text-transform: uppercase;
+      color: var(--text-3); padding: 8px 0; border-bottom: 1px solid var(--border);
+    }
+    .stats-table td {
+      padding: 10px 0; border-bottom: 1px solid var(--border);
+      font-size: 13px; color: var(--text-2);
+    }
+    .stats-table td:last-child { text-align: right; font-weight: 600; color: var(--text); font-family: var(--mono); }
+    .stats-table tr:last-child td { border-bottom: none; }
+
+    /* ══════════════════════════════════════════
+       SETTINGS TAB
+    ══════════════════════════════════════════ */
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .setting-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-label { font-size: 13px; color: var(--text-2); }
+    .setting-val { font-size: 13px; font-weight: 600; color: var(--text); font-family: var(--mono); }
+    .toggle {
+      position: relative; width: 42px; height: 24px;
+      background: var(--surface-3); border: 1px solid var(--border);
+      border-radius: 12px; cursor: pointer; transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle.on { background: var(--success); border-color: var(--success); }
+    .toggle::after {
+      content: '';
+      position: absolute; top: 3px; left: 3px;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: #fff; transition: transform 0.2s;
+    }
+    .toggle.on::after { transform: translateX(18px); }
+
+    /* ══════════════════════════════════════════
+       TOAST NOTIFICATIONS
+    ══════════════════════════════════════════ */
+    #toastContainer {
+      position: fixed; top: 20px; right: 20px; z-index: 9999;
+      display: flex; flex-direction: column; gap: 10px;
+      pointer-events: none;
+    }
+    .toast {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--danger);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      min-width: 280px; max-width: 340px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.6);
+      pointer-events: all;
+      animation: toastIn 0.3s ease;
+    }
+    .toast.warning { border-left-color: var(--warning); }
+    .toast.info    { border-left-color: var(--accent); }
+    .toast-title { font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 3px; }
+    .toast-body  { font-size: 12px; color: var(--text-2); }
+    .toast-close {
+      float: right; background: none; border: none;
+      color: var(--text-3); cursor: pointer; font-size: 16px;
+      margin: -2px -2px 0 8px; line-height: 1;
+    }
+    @keyframes toastIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+
+    /* ══════════════════════════════════════════
+       SCROLLBAR
+    ══════════════════════════════════════════ */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 3px; }
+
+    /* ══════════════════════════════════════════
+       RESPONSIVE
+    ══════════════════════════════════════════ */
+    @media (max-width: 900px) {
+      .sidebar { width: 56px; }
+      .sidebar-brand .brand-text,
+      .nav-item span, .nav-section-label,
+      .sidebar-footer .conn-indicator span,
+      .nav-badge { display: none; }
+      .sidebar-brand { padding: 0 10px 20px; justify-content: center; }
+      .nav-item { padding: 12px; justify-content: center; }
+      .page { padding: 16px; }
+      .metrics-row { grid-template-columns: 1fr 1fr; }
+      .charts-row { grid-template-columns: 1fr; }
+      .alerts-grid { grid-template-columns: 1fr; }
+      .analytics-grid { grid-template-columns: 1fr; }
+      .settings-grid { grid-template-columns: 1fr; }
+      .topbar { padding: 0 16px; }
+    }
+    @media (max-width: 600px) {
+      .metrics-row { grid-template-columns: 1fr 1fr; }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <img src="./assets/favicon" alt="Mine Pulse" />
-    <div class="brand">
-      <h1>Mine Pulse Dashboard</h1>
-      <p>Live mine safety operations, sensor status, and hazard alerts from your Firebase-connected field network.</p>
+
+<div id="toastContainer"></div>
+
+<div class="shell">
+
+  <!-- ════ SIDEBAR ════ -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-logo">MP</div>
+      <div class="brand-text">
+        <div class="brand-name">Mine Pulse</div>
+        <div class="brand-sub">Safety Monitor</div>
+      </div>
     </div>
-  </header>
 
-  <main>
-    <div id="dashboardContent">
-      <div class="top-panel">
-        <section class="panel">
-          <h2>Live Application Status</h2>
-          <p>Surface gateway status and alerts are streamed through Firebase Realtime Database. This matches the device and mobile app data path for consistent mine safety monitoring.</p>
-        </section>
-        <section class="panel">
-          <h2>Connection</h2>
-          <p id="connectionStatus">Waiting for Firebase...</p>
-          <p id="lastUpdated" style="margin-top: 12px; color: var(--muted);">No data loaded yet.</p>
-        </section>
+    <div class="nav-section-label">Monitoring</div>
+    <button class="nav-item active" data-view="overview">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span>Overview</span>
+    </button>
+    <button class="nav-item" data-view="alerts">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span>Alerts</span>
+      <span class="nav-badge" id="navAlertBadge" style="display:none">0</span>
+    </button>
+    <button class="nav-item" data-view="map">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+      <span>Map</span>
+    </button>
+    <button class="nav-item" data-view="analytics">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      <span>Analytics</span>
+    </button>
+
+    <div class="nav-section-label" style="margin-top:8px">System</div>
+    <button class="nav-item" data-view="settings">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>Settings</span>
+    </button>
+
+    <div class="sidebar-footer">
+      <div class="conn-indicator">
+        <div class="conn-dot" id="connDot"></div>
+        <span id="connLabel">Connecting…</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ════ CONTENT ════ -->
+  <div class="content">
+
+    <!-- TOPBAR -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h2 id="pageTitle">Overview</h2>
+        <p id="pageSubtitle">Real-time mine safety telemetry</p>
+      </div>
+      <div class="topbar-right">
+        <div class="topbar-time" id="clockDisplay">--:--:--</div>
+        <button class="btn btn-ghost" onclick="requestNotificationPermission()">
+          🔔 <span id="notifLabel">Enable Alerts</span>
+        </button>
+        <button class="btn btn-danger" onclick="triggerSOS()">
+          ⚠️ SOS
+        </button>
+      </div>
+    </header>
+
+    <div class="page">
+
+      <!-- ════ OVERVIEW ════ -->
+      <div class="view-panel active" id="view-overview">
+
+        <!-- Status Banner -->
+        <div class="status-banner safe" id="statusBanner">
+          <div class="banner-icon">✅</div>
+          <div>
+            <div class="banner-title" id="bannerTitle">All Systems Stable</div>
+            <div class="banner-sub" id="bannerSub">No active hazards detected. Continue routine monitoring.</div>
+          </div>
+        </div>
+
+        <!-- Metrics -->
+        <div class="metrics-row">
+          <div class="metric">
+            <div class="metric-label">Active Alerts</div>
+            <div class="metric-value v-danger" id="metricAlerts">—</div>
+            <div class="metric-sub">Nodes in alert state</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Safe Nodes</div>
+            <div class="metric-value v-success" id="metricSafe">—</div>
+            <div class="metric-sub">Operating normally</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Online Nodes</div>
+            <div class="metric-value v-accent" id="metricOnline">—</div>
+            <div class="metric-sub">Connected to gateway</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Last Update</div>
+            <div class="metric-value v-accent" id="metricTime" style="font-size:14px;margin-top:10px">—</div>
+            <div class="metric-sub" id="metricDate"></div>
+          </div>
+        </div>
+
+        <!-- Node Cards -->
+        <div class="section-label">Live Node Status</div>
+        <div class="nodes-grid" id="nodesGrid">
+          <div class="node-card">
+            <div class="empty-state"><div class="icon">📡</div>Connecting to nodes…</div>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="section-label">Sensor Trends</div>
+        <div class="charts-row">
+          <div class="chart-card">
+            <div class="chart-title">Methane (MQ-4) · ppm</div>
+            <div class="chart-wrap"><canvas id="chartMQ4"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Carbon Monoxide (MQ-7) · ppm</div>
+            <div class="chart-wrap"><canvas id="chartMQ7"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Alert Distribution</div>
+            <div class="chart-wrap"><canvas id="chartDist"></canvas></div>
+          </div>
+        </div>
       </div>
 
-    <section class="metric-grid" id="metricCards">
-      <div class="metric-card">
-        <h3>Active alerts</h3>
-        <p id="activeAlerts">0</p>
+      <!-- ════ ALERTS ════ -->
+      <div class="view-panel" id="view-alerts">
+        <div class="alerts-grid">
+          <div class="alerts-left">
+            <div class="panel">
+              <div class="panel-title">
+                🚨 Active Alerts
+                <span class="panel-count" id="activeCount" style="display:none">0</span>
+              </div>
+              <div class="alert-list" id="activeAlertsList">
+                <div class="empty-state"><div class="icon">✅</div>No active alerts — all mines operating normally.</div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-title">
+                📋 Alert History
+                <span class="panel-count muted" id="historyCount">0</span>
+              </div>
+              <div class="alert-list" id="alertHistoryList">
+                <div class="empty-state"><div class="icon">📂</div>No historical alerts recorded yet.</div>
+              </div>
+            </div>
+          </div>
+          <div class="alerts-right">
+            <div class="panel detail-panel" id="detailPanel">
+              <div class="panel-title">Alert Details</div>
+              <div id="detailContent" class="placeholder-detail">
+                <div class="icon">👆</div>
+                Select an alert to view full hazard summary and recommended response.
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="metric-card">
-        <h3>Safe nodes</h3>
-        <p id="safeNodes">0</p>
-      </div>
-      <div class="metric-card">
-        <h3>Total nodes</h3>
-        <p id="totalNodes">0</p>
-      </div>
-    </section>
 
-    <section class="status-grid" id="mineStatusCards">
-      <div class="status-card">
-        <h3>Loading sensor data...</h3>
-        <p style="color: var(--muted); margin-top: 12px;">Realtime sensor cards will appear here once Firebase data is loaded.</p>
+      <!-- ════ MAP ════ -->
+      <div class="view-panel" id="view-map">
+        <div class="map-wrap">
+          <div id="leafletMap"></div>
+        </div>
+        <div class="map-legend">
+          <div class="legend-item"><div class="legend-dot" style="background:#2e7dff"></div> Primary Device (MP-001)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Node — Safe</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#ff4d4d"></div> Node — Alert</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#8fa3bf"></div> Node — Offline</div>
+          <div style="margin-left:auto; font-size:12px; color:var(--text-3)">Kuruwita · Ratnapura · Sri Lanka</div>
+        </div>
       </div>
-    </section>
 
-    <section class="panel settings-panel">
-      <div>
-        <h2>Alerts & Notifications</h2>
-        <p>Realtime alerts are tracked from the Firebase project. This dashboard reflects the same live alerts and status data as your Android Mine Pulse dashboard.</p>
+      <!-- ════ ANALYTICS ════ -->
+      <div class="view-panel" id="view-analytics">
+        <div class="analytics-grid three" style="margin-bottom:14px">
+          <div class="metric">
+            <div class="metric-label">Critical Alerts</div>
+            <div class="metric-value v-danger" id="anCritical">0</div>
+            <div class="metric-sub">Require immediate action</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Warning Alerts</div>
+            <div class="metric-value v-warning" id="anWarning">0</div>
+            <div class="metric-sub">Monitor closely</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Total Tracked</div>
+            <div class="metric-value v-accent" id="anTotal">0</div>
+            <div class="metric-sub">All-time alert events</div>
+          </div>
+        </div>
+        <div class="analytics-grid">
+          <div class="chart-card">
+            <div class="chart-title">Hazard Type Distribution</div>
+            <div class="chart-wrap"><canvas id="chartHazard"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Sensor Readings per Node</div>
+            <div class="chart-wrap" style="height:200px"><canvas id="chartNodes"></canvas></div>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:14px">
+          <div class="panel-title">Sensor Summary Table</div>
+          <table class="stats-table" id="sensorTable">
+            <thead>
+              <tr>
+                <th>Node</th>
+                <th>MQ-4 Methane</th>
+                <th>MQ-7 CO</th>
+                <th>Water</th>
+                <th>RSSI</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="sensorTableBody">
+              <tr><td colspan="6" style="color:var(--text-3);text-align:center;padding:20px">Waiting for data…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-      <div>
-        <h2>Dashboard Settings</h2>
-        <p>Configured for your Firebase project and live sensor network. You can add more nodes or alerts in the same database structure to expand visibility.</p>
+
+      <!-- ════ SETTINGS ════ -->
+      <div class="view-panel" id="view-settings">
+        <div class="settings-grid">
+          <div class="panel">
+            <div class="panel-title">System Info</div>
+            <div class="setting-row"><span class="setting-label">Project</span><span class="setting-val">mine-pulse</span></div>
+            <div class="setting-row"><span class="setting-label">Database</span><span class="setting-val">Firebase RTDB</span></div>
+            <div class="setting-row"><span class="setting-label">Nodes configured</span><span class="setting-val">3</span></div>
+            <div class="setting-row"><span class="setting-label">Dashboard version</span><span class="setting-val">3.0</span></div>
+            <div class="setting-row"><span class="setting-label">Browser Alerts</span><span class="setting-val" id="notifStatus">—</span></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">Alert Thresholds</div>
+            <div class="setting-row"><span class="setting-label">Methane critical</span><span class="setting-val" style="color:var(--danger)">≥ 100 ppm (ESP32)</span></div>
+            <div class="setting-row"><span class="setting-label">CO critical</span><span class="setting-val" style="color:var(--danger)">≥ 150 ppm (ESP32)</span></div>
+            <div class="setting-row"><span class="setting-label">Water level</span><span class="setting-val" style="color:var(--warning)">HIGH = alert</span></div>
+            <div class="setting-row"><span class="setting-label">RSSI warning</span><span class="setting-val" style="color:var(--warning)">≤ −80 dBm</span></div>
+            <div class="setting-row"><span class="setting-label">Alert source</span><span class="setting-val">ESP32 hazard_* flags</span></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">Operational Controls</div>
+            <div class="setting-row">
+              <span class="setting-label">Browser notifications</span>
+              <div class="toggle" id="toggleNotif" onclick="toggleSetting(this)"></div>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label">Sound alerts</span>
+              <div class="toggle on" id="toggleSound" onclick="toggleSetting(this)"></div>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label">Auto-refresh</span>
+              <div class="toggle on" id="toggleRefresh" onclick="toggleSetting(this)"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">Emergency Contact</div>
+            <div class="setting-row"><span class="setting-label">SOS Number</span><span class="setting-val">119</span></div>
+            <div class="setting-row"><span class="setting-label">Mine site</span><span class="setting-val">Kuruwita, Ratnapura</span></div>
+            <button class="btn btn-danger" style="width:100%;margin-top:10px;justify-content:center" onclick="triggerSOS()">
+              ⚠️ Trigger Emergency SOS
+            </button>
+          </div>
+        </div>
       </div>
-    </section>
 
-    <section class="panel">
-      <h2>Recent Hazard Events</h2>
-      <div class="alert-list" id="alertHistory">
-        <div class="alert-item"><h4>Waiting for live alert history...</h4></div>
-      </div>
-    </section>
-  </div>
-  </main>
+    </div><!-- /page -->
+  </div><!-- /content -->
+</div><!-- /shell -->
 
-  <footer>
-    Mine Pulse &ndash; professional mine safety monitoring with cloud alerts and live node status.
-  </footer>
-
-  <script type="module" src="./app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script type="module" src="./app.js"></script>
 </body>
 </html>
