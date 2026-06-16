@@ -11,9 +11,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'firebase_options.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GLOBALS
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -27,9 +25,7 @@ const AndroidNotificationChannel _mineAlertChannel = AndroidNotificationChannel(
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ALERT SEVERITY
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class AlertSeverity {
   static const String critical = 'Critical';
@@ -38,9 +34,7 @@ class AlertSeverity {
   static const String safe     = 'Safe';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DATA MODELS
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class AlertEvent {
   AlertEvent({
@@ -96,9 +90,6 @@ class MineStatus {
   final bool waterHigh;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ALERT TIMESTAMP REGISTRY
-// ─────────────────────────────────────────────────────────────────────────────
 
 class AlertTimestampRegistry {
   AlertTimestampRegistry._();
@@ -114,16 +105,7 @@ class AlertTimestampRegistry {
   bool isRegistered(String key) => _firstSeen.containsKey(key);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ALERT HISTORY MANAGER
-//
-// CHANGED:
-//   - Active alerts are NEVER removed. They stay in _active permanently once
-//     triggered. They also get added to history immediately so they persist
-//     in both sections.
-//   - updateCurrentAlerts only ADDS new alerts; it never removes any.
-//   - History is never pruned.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class AlertHistoryManager {
   AlertHistoryManager._();
@@ -165,9 +147,7 @@ class AlertHistoryManager {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BACKGROUND MESSAGE HANDLER
-// ─────────────────────────────────────────────────────────────────────────────
+/
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -195,9 +175,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -214,9 +192,7 @@ Future<void> main() async {
   runApp(MinePulseApp(firebaseAvailable: firebaseAvailable));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ROOT APP
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class MinePulseApp extends StatefulWidget {
   const MinePulseApp({super.key, required this.firebaseAvailable});
@@ -370,9 +346,7 @@ class _MinePulseAppState extends State<MinePulseApp> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HOME SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.firebaseAvailable});
@@ -455,7 +429,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  // ── Parse /status/<nodeKey> ────────────────────────────────────────────────
+ 
   //
   // KEY FIX — hazard flags come ONLY from the ESP32's own hazard_* fields.
   //
@@ -487,13 +461,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final data = Map<String, dynamic>.from(raw as Map);
     debugPrint('[RTDB] ${device.id}: $data');
 
-    // ── Raw sensor integers (display only — NOT used for alert logic) ────────
+  
     final mq4Val  = _toInt(_firstOf(data, ['mq4',  'MQ4',  'ch4',  'methane']));
     final mq7Val  = _toInt(_firstOf(data, ['mq7',  'MQ7',  'co',   'carbon_monoxide']));
     final rssiVal = _toInt(_firstOf(data, ['rssi', 'RSSI', 'signal']));
     final battVal = _firstOf(data, ['battery', 'Battery', 'batt', 'vbat']);
 
-    // ── Water display string (for MineCard UI only) ──────────────────────────
+    
     String waterStr = 'Normal';
     final waterRaw = _firstOf(data, ['water', 'Water', 'waterLevel', 'water_level']);
     if (waterRaw != null) {
@@ -505,7 +479,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    // ── ALERT FLAGS: driven ONLY by ESP32 hazard_* fields ───────────────────
+   
     //
     // These are the ONLY fields that control whether an alert fires.
     // Raw sensor numbers (mq4Val, mq7Val) are NOT used for alert decisions.
@@ -527,7 +501,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // active = inAlert AND at least one specific hazard flag is set
     final bool active = inAlert && (ch4High || coHigh || waterHigh);
 
-    // ── Timestamp ────────────────────────────────────────────────────────────
+  
     DateTime? serverTs;
     final tsRaw = data['timestamp'];
     if (tsRaw != null) {
@@ -580,7 +554,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return s.isNotEmpty && s != 'false' && s != '0';
   }
 
-  // ── Generate alerts ────────────────────────────────────────────────────────
+ 
   //
   // Each sensor alert fires ONLY when its own specific flag is true:
   //   ch4High  → Methane alerts
@@ -601,7 +575,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final sTs = mine.serverTimestamp;
 
-      // ── CH4 / Methane ──────────────────────────────────────────────────────
+ 
       // Only fires when hazard_ch4 is truthy on the ESP32
       if (mine.ch4High) {
         if (mine.mq4 >= 100) {
@@ -641,7 +615,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      // ── CO ─────────────────────────────────────────────────────────────────
+      
       // Only fires when hazard_co is truthy on the ESP32
       if (mine.coHigh) {
         if (mine.mq7 >= 150) {
@@ -681,7 +655,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      // ── Water ──────────────────────────────────────────────────────────────
+   
       // Only fires when hazard_water is truthy OR water sensor reads HIGH
       if (mine.waterHigh) {
         final key = '${mine.id}__Water Ingress Detected';
@@ -702,7 +676,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ));
       }
 
-      // ── Signal quality ─────────────────────────────────────────────────────
+      
       if (mine.rssi != 0 && mine.rssi <= -80) {
         final key = '${mine.id}__Poor Signal Quality';
         final ts  = registry.getOrRegister(key, serverTime: sTs);
@@ -739,7 +713,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return alerts;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -857,9 +831,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STATIC DEVICE MODEL
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class _StaticDevice {
   const _StaticDevice({
@@ -870,9 +842,7 @@ class _StaticDevice {
   final double lat, lng;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 String _formatTimestamp(DateTime dt) {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -882,9 +852,6 @@ String _formatTimestamp(DateTime dt) {
   return '${dt.day} ${months[dt.month - 1]} ${dt.year} · $hour:$min $ampm';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SHARED WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader({required this.title, this.count, this.countColor});
@@ -979,9 +946,7 @@ class _SummaryCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ALERT TILE
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class AlertTile extends StatelessWidget {
   const AlertTile({super.key, required this.alert});
@@ -1087,9 +1052,6 @@ class AlertTile extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MINE CARD
-// ─────────────────────────────────────────────────────────────────────────────
 
 class MineCard extends StatelessWidget {
   const MineCard({super.key, required this.status});
@@ -1174,9 +1136,7 @@ class _SensorRow extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DASHBOARD TAB
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class DashboardTab extends StatelessWidget {
   const DashboardTab({
@@ -1297,9 +1257,7 @@ class DashboardTab extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ALERTS TAB
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 class AlertsTab extends StatelessWidget {
   const AlertsTab({super.key, required this.alerts, required this.mines, required this.demoMode});
@@ -1430,9 +1388,6 @@ class _AlertHistoryCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAP TAB
-// ─────────────────────────────────────────────────────────────────────────────
 
 class MapTab extends StatelessWidget {
   const MapTab({
@@ -1775,9 +1730,6 @@ class _SensorGroupedBars extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SETTINGS TAB
-// ─────────────────────────────────────────────────────────────────────────────
 
 class SettingsTab extends StatefulWidget {
   const SettingsTab({
