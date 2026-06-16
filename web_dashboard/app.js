@@ -7,7 +7,6 @@ import {
   query, orderBy, limit, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-// ── Firebase config ────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: 'AIzaSyAdcl_IWkukKlA17vjJlNFoZtej2H_7brY',
   authDomain: 'mine-pulse.firebaseapp.com',
@@ -31,7 +30,6 @@ const NODE_LABELS = {
   mine3: "Node C · Level 3"
 };
 
-// ── State ──────────────────────────────────────────────────────
 const state = {
   nodes: {},          // { mine1: { inAlert, message, severity, title, ts } }
   activeAlerts: [],
@@ -55,9 +53,6 @@ NODE_IDS.forEach(id => {
   state.mq7History[id] = [];
 });
 
-// ══════════════════════════════════════════════════════════════
-//  NAVIGATION
-// ══════════════════════════════════════════════════════════════
 function initNav() {
   const navItems = document.querySelectorAll(".nav-item[data-view]");
   const panels   = document.querySelectorAll(".view-panel");
@@ -90,9 +85,6 @@ function initNav() {
   });
 }
 
-// ══════════════════════════════════════════════════════════════
-//  CLOCK
-// ══════════════════════════════════════════════════════════════
 function initClock() {
   function tick() {
     const now = new Date();
@@ -103,10 +95,6 @@ function initClock() {
   setInterval(tick, 1000);
 }
 
-// ══════════════════════════════════════════════════════════════
-//  RTDB LISTENER — reads YOUR mobile app structure
-//  { inAlert, message, severity, title }
-// ══════════════════════════════════════════════════════════════
 function listenRTDB() {
   NODE_IDS.forEach(nodeId => {
     const nodeRef = ref(db, `status/${nodeId}`);
@@ -148,9 +136,6 @@ function listenRTDB() {
   });
 }
 
-// ══════════════════════════════════════════════════════════════
-//  FIRESTORE — Alert log (shared with mobile app)
-// ══════════════════════════════════════════════════════════════
 function listenFirestoreAlerts() {
   const q = query(
     collection(fs, "alerts"),
@@ -164,9 +149,6 @@ function listenFirestoreAlerts() {
   });
 }
 
-// ══════════════════════════════════════════════════════════════
-//  WRITE TO FIRESTORE (shared log with mobile app)
-// ══════════════════════════════════════════════════════════════
 async function writeAlertToFirestore(nodeId, data) {
   try {
     await addDoc(collection(fs, "alerts"), {
@@ -183,9 +165,6 @@ async function writeAlertToFirestore(nodeId, data) {
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-//  ALERT LOGIC — uses title/message/severity from Firebase
-// ══════════════════════════════════════════════════════════════
 function handleNewAlert(nodeId, data) {
   const alertObj = {
     id:       `${nodeId}-${Date.now()}`,
@@ -221,7 +200,6 @@ function handleAlertCleared(nodeId) {
   renderOverview();
 }
 
-// ── Severity → CSS class / icon mapping ───────────────────────
 function sevClass(severity) {
   if (severity === "critical") return "critical";
   if (severity === "warning")  return "warning";
@@ -234,9 +212,6 @@ function sevIcon(severity) {
   return "🔵";
 }
 
-// ══════════════════════════════════════════════════════════════
-//  RENDER — OVERVIEW (status banner + metrics + node cards)
-// ══════════════════════════════════════════════════════════════
 function renderOverview() {
   const nodes      = Object.values(state.nodes);
   const alertNodes = nodes.filter(n => n.inAlert);
@@ -289,9 +264,6 @@ function renderOverview() {
   renderTrendCharts();
 }
 
-// ══════════════════════════════════════════════════════════════
-//  RENDER — NODE CARDS (uses title/message/severity)
-// ══════════════════════════════════════════════════════════════
 function renderNodeCards() {
   const grid = document.getElementById("nodesGrid");
   if (!grid) return;
@@ -405,9 +377,6 @@ function nodeOfflineCard(id) {
   </div>`;
 }
 
-// ══════════════════════════════════════════════════════════════
-//  RENDER — ALERTS TAB (active + history)
-// ══════════════════════════════════════════════════════════════
 function renderActiveAlerts() {
   const list  = document.getElementById("activeAlertsList");
   const count = document.getElementById("activeCount");
@@ -489,7 +458,6 @@ function alertRowHTML({ nodeId, title, message, severity, ts, isHistory, idx }) 
   </div>`;
 }
 
-// ── Alert Detail Panel ─────────────────────────────────────────
 function showAlertDetail(nodeId, data, isHistory = false) {
   const panel = document.getElementById("detailContent");
   if (!panel || !data) return;
@@ -551,9 +519,6 @@ function showAlertDetail(nodeId, data, isHistory = false) {
   </div>`;
 }
 
-// ══════════════════════════════════════════════════════════════
-//  ANALYTICS — updated to use severity field
-// ══════════════════════════════════════════════════════════════
 function updateAnalyticsCounters() {
   const critical = state.alertHistory.filter(a => a.severity === "critical").length;
   const warning  = state.alertHistory.filter(a => a.severity === "warning").length;
@@ -593,9 +558,6 @@ function renderSensorTable() {
   }).join("");
 }
 
-// ══════════════════════════════════════════════════════════════
-//  CHARTS
-// ══════════════════════════════════════════════════════════════
 const CHART_COLORS = {
   mine1: "#2e7dff",
   mine2: "#22c55e",
@@ -707,9 +669,6 @@ function redrawAnalyticsCharts() {
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-//  MAP (Leaflet)
-// ══════════════════════════════════════════════════════════════
 const NODE_COORDS = {
   mine1: [6.7850, 80.3640],
   mine2: [6.7870, 80.3670],
@@ -767,9 +726,6 @@ function updateMapMarker(nodeId) {
   `);
 }
 
-// ══════════════════════════════════════════════════════════════
-//  NOTIFICATIONS & SOUND
-// ══════════════════════════════════════════════════════════════
 window.requestNotificationPermission = async function () {
   if (!("Notification" in window)) return;
   const perm = await Notification.requestPermission();
@@ -805,9 +761,6 @@ function playAlertSound() {
   } catch (e) {}
 }
 
-// ══════════════════════════════════════════════════════════════
-//  SOS
-// ══════════════════════════════════════════════════════════════
 window.triggerSOS = function () {
   showToast("🆘 SOS TRIGGERED", "Emergency services notified. Evacuate mine immediately!", "danger");
   playAlertSound();
@@ -818,9 +771,6 @@ window.triggerSOS = function () {
   }
 };
 
-// ══════════════════════════════════════════════════════════════
-//  SETTINGS TOGGLES
-// ══════════════════════════════════════════════════════════════
 window.toggleSetting = function (el) {
   el.classList.toggle("on");
   const id = el.id;
@@ -831,9 +781,6 @@ window.toggleSetting = function (el) {
   }
 };
 
-// ══════════════════════════════════════════════════════════════
-//  TOAST
-// ══════════════════════════════════════════════════════════════
 function showToast(title, body, type = "danger") {
   const container = document.getElementById("toastContainer");
   if (!container) return;
@@ -848,9 +795,6 @@ function showToast(title, body, type = "danger") {
   setTimeout(() => t.remove(), 6000);
 }
 
-// ══════════════════════════════════════════════════════════════
-//  CONNECTION STATUS
-// ══════════════════════════════════════════════════════════════
 function setConnectionStatus(connected) {
   const dot   = document.getElementById("connDot");
   const label = document.getElementById("connLabel");
@@ -864,17 +808,11 @@ function setConnectionStatus(connected) {
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-//  HELPERS
-// ══════════════════════════════════════════════════════════════
 function setText(id, val) {
   const el = document.getElementById(id);
   if (el) el.textContent = val;
 }
 
-// ══════════════════════════════════════════════════════════════
-//  BOOT
-// ══════════════════════════════════════════════════════════════
 document.addEventListener("DOMContentLoaded", () => {
   initNav();
   initClock();
