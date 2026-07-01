@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.jpg" alt="MinePulse Logo" width="100"/>
+<img src="assets/fav_icon.jpg" alt="MinePulse Logo" width="100"/>
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0F172A,50:1E3A8A,100:FACC15&height=200&section=header&text=MinePulse&fontSize=60&fontColor=FFFFFF&animation=fadeIn&fontAlignY=38&desc=Smart%20Underground%20Mine%20Safety%20System&descAlignY=58&descSize=20" width="100%"/>
 
@@ -9,6 +9,11 @@
 </a>
 
 <br/>
+
+![Status](https://img.shields.io/badge/Status-Completed-brightgreen?style=for-the-badge&logo=checkmarx)
+![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
+![Platform](https://img.shields.io/badge/Platform-ESP32--S3-black?style=for-the-badge&logo=espressif)
+![Stars](https://img.shields.io/github/stars/SanchilaAmavi/mine-safety-system?style=for-the-badge&color=FACC15)
 
 <br/>
 
@@ -120,6 +125,7 @@ One surface gateway can monitor multiple underground nodes — built to expand a
 
 <br/>
 
+
 <details>
 <summary>🔽 Flow Charts — Underground Node & Surface Gateway (click to expand)</summary>
 
@@ -165,9 +171,9 @@ One surface gateway can monitor multiple underground nodes — built to expand a
 <table>
 <tr>
 <td align="center" width="25%"><img src="assets/minepulse%20mobile%201.jpg" width="160"/><br/><sub><b>📱 minepulse mobile 1</b><br/>Live Alert Dashboard</sub></td>
-<td align="center" width="25%"><img src="assets/minepulse%20mobile3.jpg" width="160"/><br/><sub><b>📱 minepulse mobile 3</b><br/>Mine Status View</sub></td>
-<td align="center" width="25%"><img src="assets/minepulsemobile%204.jpg" width="160"/><br/><sub><b>📱 minepulse mobile 4</b><br/>Alert History</sub></td>
-<td align="center" width="25%"><img src="assets/minepulsemobile%205.jpg" width="160"/><br/><sub><b>📱 minepulse mobile 5</b><br/>Location / Map View</sub></td>
+<td align="center" width="25%"><img src="assets/minepulse%20mobile3.jpg" width="160"/><br/><sub><b>📱 minepulse mobile3</b><br/>Mine Status View</sub></td>
+<td align="center" width="25%"><img src="assets/minepulsemobile4.jpg" width="160"/><br/><sub><b>📱 minepulsemobile4</b><br/>Alert History</sub></td>
+<td align="center" width="25%"><img src="assets/minepulsemobile5.jpg" width="160"/><br/><sub><b>📱 minepulsemobile5</b><br/>Location / Map View</sub></td>
 </tr>
 </table>
 
@@ -303,6 +309,9 @@ mine-safety-system/
 <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/rainbow.gif" width="100%">
 
 
+</div>
+
+<br/>
 
 <div align="center">
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:FACC15,50:1E3A8A,100:0F172A&height=120&section=footer&animation=fadeIn" width="100%"/>
